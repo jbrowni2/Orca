@@ -2895,7 +2895,7 @@ static uint32_t addressCounterOffset[4][2]={ //group,bank
 {
     if(aGroup>kNumSIS3316Groups)return;
     if(aValue<2)aValue = 2;
-    if(aValue> 0x7FA)aValue = 0x7FA;
+    if(aValue> 0x3FFF)aValue = 0x3FFF;
     aValue &= ~0x0001;
     [[[self undoManager] prepareWithInvocationTarget:self] setPreTriggerDelay:aGroup withValue:[self preTriggerDelay:aGroup]];
     preTriggerDelay[aGroup]=aValue;
@@ -2905,10 +2905,10 @@ static uint32_t addressCounterOffset[4][2]={ //group,bank
 
 - (void) writePreTriggerDelays
 {
-    uint32_t preTriggerDelayPGBit = 0x1; //hardcoded for now
+    uint32_t preTriggerDelayPGBit = 0x0; //hardcoded for now
     int i;
     for(i = 0; i < kNumSIS3316Groups; i++) {
-        uint32_t data = ([self preTriggerDelay:i] & 0x7FF) | (preTriggerDelayPGBit << 15);
+        uint32_t data = ([self preTriggerDelay:i] & 0x3FFF) | (preTriggerDelayPGBit << 15);
         [self writeLong:data toAddress:[self groupRegister:kPreTriggerDelayReg group:i]];
     }
 }
@@ -2922,7 +2922,7 @@ static uint32_t addressCounterOffset[4][2]={ //group,bank
     for(i =0; i < kNumSIS3316Groups; i++) {
         uint32_t aValue =  [self readLongFromAddress:[self groupRegister:kPreTriggerDelayReg group:i]];
          if(verbose){
-            uint32_t thePreTriggerDelays   = ((aValue >> 0x1) & 0x7FA)  ;
+            uint32_t thePreTriggerDelays   = ((aValue >> 0x1) & 0x3FFF)  ;
             NSLog(@"%2d: 0x%08x\n",i, thePreTriggerDelays);
         }
     }
@@ -4108,9 +4108,7 @@ NSString* tauTable[4] ={
 - (void) initBoard
 {
     [self reset];
-    [self adcSpiSetup];
-    [self setupSharing];
-    
+    [self adcSpiSetup];    
     //if(!clocksProgrammed){
         //very involved... no need to do more than once
         [self setupClock];
@@ -5060,34 +5058,47 @@ NSString* tauTable[4] ={
 }
 - (void) setupSharing
 {
-    int sharing = 0; //no sharing for now.. move to GUI selection
-    int fp_lvds_bus_control_value = 0 ;
-    if (sharing == 1) {
-        fp_lvds_bus_control_value = fp_lvds_bus_control_value + 0x10  ;
+    uint32_t control_setting = sharing;
+    // we get the control_setting from the gui.
+    // control_setting = 0 means there is no connection between multiple boards
+    // control_setting = 1 means that this board is the parent
+    // control_setting = 2 means that this board is the child
+    
+    //This is just setting the control bits. No other control logic is setup.
+    //Specifically any logic needed for reading data has not been looked at.
+    NSLog(@"sharing is set to %i\n",control_setting);
+    
+    if (control_setting==0){
+        
+        uint32_t aValue = 0x0;
+        [self writeLong:aValue toAddress:[self singleRegister:kFPBusControlReg]];
     }
-    if (sharing == 2) {
-        fp_lvds_bus_control_value = fp_lvds_bus_control_value + 0x20  ;
+    if (control_setting == 1){
+        uint32_t aValue = 0x13;
+        [self writeLong:aValue toAddress:[self singleRegister:kFPBusControlReg]];
     }
-    [self writeLong:fp_lvds_bus_control_value toAddress:[self singleRegister:kFPBusControlReg]];
+    if (control_setting == 2){
+        uint32_t aValue = 0x2;
+        [self writeLong:aValue toAddress:[self singleRegister:kFPBusControlReg]];
+    }
 }
 
 - (void) setupClock
 {
     //----------------------------------------------------------
     //clock setup from Matthias example code...
-    uint32_t addr = [self singleRegister:kAdcDataLinkStatusReg];
-    [self writeLong:0xE0E0E0E0 toAddress:addr];  // clear error Latch bits
-    uint32_t aValue =  [self readLongFromAddress:addr];
-    if (aValue != 0x18181818) {
-        NSLogColor([NSColor redColor],@"Error: SIS3316_VME_FPGA_LINK_ADC_PROT_STATUS: data = 0x%08x\n", aValue);
-    }
-
+    //uint32_t addr = [self singleRegister:kAdcDataLinkStatusReg];
+    //[self writeLong:0xE0E0E0E0 toAddress:addr];  // clear error Latch bits
+    //uint32_t aValue =  [self readLongFromAddress:addr];
+    //if (aValue != 0x18181818) {
+    //    NSLogColor([NSColor redColor],@"Error: SIS3316_VME_FPGA_LINK_ADC_PROT_STATUS: data = 0x%08x\n", aValue);
+    //}
+    
     //bypass the external clock multiplier
-    [self writesi5325ClkMultiplier: 0 data: 0x2]; // Bypass
-    [self writesi5325ClkMultiplier:11 data:0x02]; //  PowerDown clk2
+    //[self writesi5325ClkMultiplier: 0 data: 0x2]; // Bypass
+    //[self writesi5325ClkMultiplier:11 data:0x02]; //  PowerDown clk2
     //end bypass
     
-    [self writeClockSource];
     
     uint32_t adcFpgaFirmwareVersion = [self readLongFromAddress:[self singleRegister:kAdcVersionReg]];
     adcFpgaFirmwareVersion &= 0xFFFF;
@@ -5272,8 +5283,13 @@ NSString* tauTable[4] ={
     else                    iobDelayValue = iob_delay_14bit_array[clock_freq_choice];
     
     [self changeFrequencyHsDivN1Div:0 hsDiv:clock_HSdiv_val n1Div:clock_N1div_val]; // reprogram internal Osc.
-    [self resetADCClockDCM];
+    usleep(10000);
     [self configureAdcFpgaIobDelays:iobDelayValue];
+    [self setupSharing];
+    [self writeClockSource];
+    usleep(20);
+    
+    [self resetADCClockDCM];
     [self enableAdcSpiAdcOutputs]; //enable ADC outputs (bit was cleared with Key-reset !)
 }
 @end
@@ -5464,12 +5480,12 @@ NSString* tauTable[4] ={
     [self writeLong:0xf00 toAddress:[self groupRegister:kAdcInputTapDelayReg group:1]];
     [self writeLong:0xf00 toAddress:[self groupRegister:kAdcInputTapDelayReg group:2]];
     [self writeLong:0xf00 toAddress:[self groupRegister:kAdcInputTapDelayReg group:3]];
-    usleep(10) ;
+    usleep(10000) ;
     [self writeLong:0x300 + iobDelayValue toAddress:[self groupRegister:kAdcInputTapDelayReg group:0]];
     [self writeLong:0x300 + iobDelayValue toAddress:[self groupRegister:kAdcInputTapDelayReg group:1]];
     [self writeLong:0x300 + iobDelayValue toAddress:[self groupRegister:kAdcInputTapDelayReg group:2]];
     [self writeLong:0x300 + iobDelayValue toAddress:[self groupRegister:kAdcInputTapDelayReg group:3]];
-    usleep(100) ;
+    usleep(10000) ;
 }
 
 - (int) readAdcSpiGroup:(unsigned int) adc_fpga_group chip:(unsigned int) adc_chip address:(uint32_t) spi_addr data:(uint32_t*) spi_data

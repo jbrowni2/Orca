@@ -58,7 +58,9 @@ bool ORSIS3316Card::Readout(SBC_LAM_Data* /*lam_data*/)
     uint32_t acqRegValue        = 0;
     uint32_t baseAddress        = GetBaseAddress();
     uint32_t addMod             = GetAddressModifier();
+    uint32_t master_address     = 0x40000000;
     uint32_t addr               = baseAddress + kSIS3316AcqControlStatusReg;
+    //uint32_t addr               = master_address + kSIS3316AcqControlStatusReg;
     if(!histoEnabledMask || (histoEnabledMask & writeEventsEnabledMask)){
         if(VMERead(addr,addMod,4,acqRegValue) != sizeof(uint32_t)){
             LogBusErrorForCard(GetSlot(),"acqReg Err: SIS3316 0x%04x %s", baseAddress,strerror(errno));
@@ -67,7 +69,10 @@ bool ORSIS3316Card::Readout(SBC_LAM_Data* /*lam_data*/)
         
         if((acqRegValue >> 19) & 0x1) { //checks the OR of the address threshold flags
             uint32_t bit[4] = {25,27,29,31};
+            //if(baseAddress == master_address){
             SwitchBanks();
+            //    usleep(1000);
+            //}
             //usleep(2); //let the banks settle. Could do a loop but this is less bus activity and faster we can take data
             for(int32_t ichan = 0;ichan<16;ichan++){
                 if(chanEnabledMask & (0x1<<ichan)){
@@ -280,7 +285,9 @@ void ORSIS3316Card::ResetFSM(uint32_t iGroup)
 
 void ORSIS3316Card::ArmBank1()
 {
+    //uint32_t parent_address = 0x40000000;
     uint32_t addr = GetBaseAddress() + kSIS3316DisarmAndArmBank1;
+    //uint32_t addr = parent_address + kSIS3316DisarmAndArmBank1;
     uint32_t aValue = 0x0;
     if (VMEWrite(addr, GetAddressModifier(), 4, aValue) != sizeof(uint32_t)){
         LogBusErrorForCard(GetSlot(),"Bank1 Err: SIS3316 0x%04x %s", GetBaseAddress(),strerror(errno));
@@ -291,7 +298,9 @@ void ORSIS3316Card::ArmBank1()
 
 void ORSIS3316Card::ArmBank2()
 {
+    //uint32_t parent_address = 0x40000000;
     uint32_t addr = GetBaseAddress() + kSIS3316DisarmAndArmBank2;
+    //uint32_t addr = parent_address + kSIS3316DisarmAndArmBank2;
     uint32_t aValue = 0x0;
     if (VMEWrite(addr, GetAddressModifier(), 4, aValue) != sizeof(uint32_t)){
         LogBusErrorForCard(GetSlot(),"Bank2 Err: SIS3316 0x%04x %s", GetBaseAddress(),strerror(errno));
