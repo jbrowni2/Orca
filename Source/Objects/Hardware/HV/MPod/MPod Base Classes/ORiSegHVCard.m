@@ -56,7 +56,7 @@ NSString* ORiSegHVCardCustomInfoChanged         = @"ORiSegHVCardCustomInfoChange
 @implementation ORiSegHVCard
 
 #define kMaxVoltage 6000
-#define kMaxCurrent 1000.
+#define kMaxCurrent 2000.
 
 #pragma mark ***Initialization
 - (id) init
