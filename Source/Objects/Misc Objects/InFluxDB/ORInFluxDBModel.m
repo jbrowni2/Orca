@@ -34,11 +34,12 @@
 #import "ORRunModel.h"
 #import "ORSegmentGroup.h"
 #import "ORDetectorSegment.h"
+#import "OROnCallListModel.h"
+#import "ORDataFileModel.h"
 #import "ORTimeRate.h"
 #import <ifaddrs.h>
 #import <arpa/inet.h>
 
-NSString* ORInFluxDBPortNumberChanged      = @"ORInFluxDBPortNumberChanged";
 NSString* ORInFluxDBAuthTokenChanged       = @"ORInFluxDBAuthTokenChanged";
 NSString* ORInFluxDBOrgChanged             = @"ORInFluxDBOrgChanged";
 NSString* ORInFluxDBBucketChanged          = @"ORInFluxDBBucketChanged";
@@ -48,17 +49,20 @@ NSString* ORInFluxDBRateChanged            = @"ORInFluxDBRateChanged";
 NSString* ORInFluxDBStealthModeChanged     = @"ORInFluxDBStealthModeChanged";
 NSString* ORInFluxDBBucketArrayChanged     = @"ORInFluxDBBucketArrayChanged";
 NSString* ORInFluxDBOrgArrayChanged        = @"ORInFluxDBOrgArrayChanged";
-
+NSString* ORInFluxDBErrorChanged           = @"ORInFluxDBErrorChanged";
+NSString* ORInFluxDBConnectionStatusChanged= @"ORInFluxDBConnectionStatusChanged";
+NSString* ORInFluxDBMaxLineCountChanged    = @"ORInFluxDBMaxLineCountChanged";
+NSString* ORInFluxDBMeasurementTimeOutChanged    = @"ORInFluxDBMeasurementTimeOutChanged";
 NSString* ORInFluxDBLock                   = @"ORInFluxDBLock";
 
 static NSString* ORInFluxDBModelInConnector = @"ORInFluxDBModelInConnector";
 
 @interface ORInFluxDBModel (private)
 - (void) updateProcesses;
-- (void) updateExperimentMetrics;
+- (void) updateExperimentDuringRun;
 - (void) updateHistory;
 - (void) updateMachineRecord;
-- (void) updateRunState:(ORRunModel*)rc;
+- (void) updateRunState:(ORRunModel*)rc running:(BOOL)isRunning;
 - (void) processElementStateChanged:(NSNotification*)aNote;
 - (void) periodicCompact;
 - (void) updateDataSets;
@@ -66,7 +70,8 @@ static NSString* ORInFluxDBModelInConnector = @"ORInFluxDBModelInConnector";
 - (void) _startAllPeriodicOperations;
 - (void) decodeBucketList:(NSDictionary*)result;
 - (void) decodeOrgList   :(NSDictionary*)result;
-- (void) postStatusLogMessage:(NSNotification*)aNote;
+- (void) processStatusLogLine:(NSNotification*)aNote;
+
 @end
 
 @implementation ORInFluxDBModel
@@ -94,20 +99,24 @@ static NSString* ORInFluxDBModelInConnector = @"ORInFluxDBModelInConnector";
     [timer           release];
     [experimentName  release];
     [runNumberString release];
+    [errorString     release];
+    [connectionAlarm clearAlarm];
+    [connectionAlarm release];
+    [lastAlarmDate   release];
+    [cmdBuffer       release];
+
     [super dealloc];
 }
 
 - (void) wakeUp
 {
     if(![self aWake]){
+        [self setConnectionStatusOK];
         [self connectionChanged];
         [self _startAllPeriodicOperations];
         [self registerNotificationObservers];
         [self executeDBCmd:[ORInFluxDBListOrgs    listOrgs]];
-        [self executeDBCmd:[ORInFluxDBDelayCmd    delay:2]];
         [self executeDBCmd:[ORInFluxDBListBuckets listBuckets]];
-        [self cleanUpRunStatus];
-
     }
     [super wakeUp];
 }
@@ -178,16 +187,6 @@ static NSString* ORInFluxDBModelInConnector = @"ORInFluxDBModelInConnector";
                      selector : @selector(runStopped:)
                          name : ORRunStoppedNotification
                        object : nil];
-
-    [notifyCenter addObserver : self
-                     selector : @selector(runStatusChanged:)
-                         name : ORRunStatusChangedNotification
-                       object : nil];
-
-    [notifyCenter addObserver : self
-                     selector : @selector(runElapsedTimeChanged:)
-                         name : ORRunElapsedTimesChangedNotification
-                       object : nil];
     
     [notifyCenter addObserver : self
                      selector : @selector(alarmPosted:)
@@ -215,26 +214,121 @@ static NSString* ORInFluxDBModelInConnector = @"ORInFluxDBModelInConnector";
                        object : nil];
     
     [notifyCenter addObserver : self
-                     selector : @selector(postStatusLogMessage:)
+                     selector : @selector(processStatusLogLine:)
                          name : @"ORDBPostLogMessage"
                        object : nil];
+    
+    [notifyCenter addObserver : self
+                     selector : @selector(getOnCallChanges:)
+                         name : OROnCallListModelEdited
+                       object : nil];
+    
+    [notifyCenter addObserver : self
+                     selector : @selector(dataFileNameChanged:)
+                         name : ORDataFileChangedNotification
+                       object : nil];
+}
+
+- (void) dataFileNameChanged:(NSNotification*)aNote
+{
+    ORDataFileModel* df = [aNote object];
+    ORRunModel* rc = [[(ORAppDelegate*)[NSApp delegate] document] findObjectWithFullID:@"ORRunModel,1"];
+    
+    ORInFluxDBMeasurement* aCmd = [ORInFluxDBMeasurement measurementForBucket:@"ORCA" org:org];
+    [aCmd start   : @"DataFile"];
+    [aCmd addField: @"FileName" withString:[df fileName]];
+    [aCmd addField: @"RunNumber"    withLong:[rc runNumber]];
+    [aCmd addField: @"SubRunNumber" withLong:[rc subRunNumber]];
+    [aCmd setTimeStamp: [[NSDate date]timeIntervalSince1970] ];
+    [self executeDBCmd:aCmd];
+}
+
+-(ORInFluxDBMeasurement*) cmdForBucket:(NSString*)aBucket
+{
+    return [ORInFluxDBMeasurement measurementForBucket:aBucket org:org];
+}
+
+- (void) getOnCallChanges:(NSNotification*)aNote
+{
+    [(OROnCallListModel*)[aNote object] loadBucket:experimentName inFluxDB:self];
 }
 
 - (void) applicationIsTerminating:(NSNotification*)aNote
 {
     [NSObject cancelPreviousPerformRequestsWithTarget:self];
- }
+}
 
 - (void) awakeAfterDocumentLoaded
 {
     [self startTimer];
+//    [self deleteCurrentAlarms];
+    [[self nextObject] postInFluxSetUp];
+    connectionAlarm = nil;
+    lastAlarmDate   = nil;
 }
 
 #pragma mark ***Accessors
+- (void) setConnectionStatusBad
+{
+    [self setConnectionStatus:kInFluxDBConnectionBad];
+}
+
+- (void) setConnectionStatusOK
+{
+    [self setConnectionStatus:kInFluxDBConnectionOK];
+}
+
+- (void) setConnectionStatusUnknown
+{
+    [self setConnectionStatus:kInFluxDBConnectionUnknown];
+}
+
+- (ORInFluxDBConnectionStatus) connectionStatus
+{
+    return connectionStatus;
+}
+
+- (void) setConnectionStatus:(ORInFluxDBConnectionStatus)status
+{
+    switch(status){
+        case kInFluxDBConnectionBad:
+            [self setErrorString:@"No Connection"];
+            if(!connectionAlarm){
+                if(lastAlarmDate) if(ABS([lastAlarmDate timeIntervalSinceNow]) < 1.0) break;
+                NSString* s = [NSString stringWithFormat:@"InFlux (%u) Unable to Connect",[self uniqueIdNumber]];
+                connectionAlarm = [[ORAlarm alloc] initWithName:s severity:kImportantAlarm];
+                [connectionAlarm setSticky:YES];
+                [connectionAlarm setHelpString:@"No InfluxDB connection.\nORCA has tried repeatedly and has been unable to reconnect. Intervention is required. Contact your database manager.\n\nThis alarm will not go away until the problem is cleared. Acknowledging the alarm will silence it."];
+                [connectionAlarm postAlarm];
+                [lastAlarmDate release];
+                lastAlarmDate = [[NSDate now] retain];
+            }
+            break;
+            
+        case kInFluxDBConnectionOK:
+            [connectionAlarm clearAlarm];
+            [connectionAlarm release];
+            connectionAlarm = nil;
+            [[NSNotificationCenter defaultCenter] postNotificationName:ORInFluxDBConnectionStatusChanged object:self];
+            break;
+            
+        case kInFluxDBConnectionUnknown:
+            [self setErrorString:@"Connection status unknown"];
+            [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(setConnectionStatusUnknown) object:nil];
+            break;
+            
+        default:
+            return;
+    }
+    connectionStatus = status;
+    [[NSNotificationCenter defaultCenter] postNotificationName:ORInFluxDBConnectionStatusChanged object:self];
+}
+
 - (id) nextObject
 {
     return [self objectConnectedTo:ORInFluxDBModelInConnector];
 }
+
 - (NSString*) experimentName
 {
     return experimentName;
@@ -244,19 +338,6 @@ static NSString* ORInFluxDBModelInConnector = @"ORInFluxDBModelInConnector";
 {
     [experimentName autorelease];
     experimentName = [aName copy];
-}
-
-- (NSUInteger) portNumber
-{
-    return portNumber;
-}
-
-- (void) setPortNumber:(NSUInteger)aPort
-{
-    [[[self undoManager] prepareWithInvocationTarget:self] setPortNumber:portNumber];
-    if(aPort == 0)aPort = 8086;
-    portNumber = aPort;
-    [[NSNotificationCenter defaultCenter] postNotificationName:ORInFluxDBPortNumberChanged object:self];
 }
 
 - (NSString*) hostName
@@ -271,7 +352,7 @@ static NSString* ORInFluxDBModelInConnector = @"ORInFluxDBModelInConnector";
     
     [hostName autorelease];
     hostName = [aHostName copy];
-    
+    [self setConnectionStatusUnknown];
     [[NSNotificationCenter defaultCenter] postNotificationName:ORInFluxDBHostNameChanged object:self];
 }
 
@@ -287,7 +368,7 @@ static NSString* ORInFluxDBModelInConnector = @"ORInFluxDBModelInConnector";
     
     [authToken autorelease];
     authToken = [aAuthToken copy];
-    
+    [self setConnectionStatusUnknown];
     [[NSNotificationCenter defaultCenter] postNotificationName:ORInFluxDBAuthTokenChanged object:self];
 }
 
@@ -304,6 +385,8 @@ static NSString* ORInFluxDBModelInConnector = @"ORInFluxDBModelInConnector";
     [org autorelease];
     org = [anOrg copy];
     
+    [self setConnectionStatusUnknown];
+
     [[NSNotificationCenter defaultCenter] postNotificationName:ORInFluxDBOrgChanged object:self];
 }
 
@@ -321,7 +404,27 @@ static NSString* ORInFluxDBModelInConnector = @"ORInFluxDBModelInConnector";
     }
     [[NSNotificationCenter defaultCenter] postNotificationName:ORInFluxDBStealthModeChanged object:self];
 }
+- (short) measurementTimeOut { return measurementTimeOut;}
+- (short) maxLineCount       { return maxLineCount;}
 
+- (void)  setMeasurementTimeOut:(short)aValue
+{
+    [[[self undoManager] prepareWithInvocationTarget:self] setMeasurementTimeOut:measurementTimeOut];
+    if(aValue<0)aValue=0;
+    if(aValue>10)aValue=10;
+
+    measurementTimeOut = aValue;
+    [[NSNotificationCenter defaultCenter] postNotificationOnMainThreadWithName:ORInFluxDBMeasurementTimeOutChanged object:self];
+}
+
+- (void)  setMaxLineCount:(short) aValue
+{
+    [[[self undoManager] prepareWithInvocationTarget:self] setMaxLineCount:maxLineCount];
+    if(aValue<0)aValue=0;
+    if(aValue>5000)aValue=5000;
+    maxLineCount = aValue;
+    [[NSNotificationCenter defaultCenter] postNotificationOnMainThreadWithName:ORInFluxDBMaxLineCountChanged object:self];
+}
 - (void) startTimer
 {
     [timer invalidate];
@@ -336,12 +439,64 @@ static NSString* ORInFluxDBModelInConnector = @"ORInFluxDBModelInConnector";
     [[NSNotificationCenter defaultCenter] postNotificationOnMainThreadWithName:ORInFluxDBRateChanged object:self];
 }
 
-- (NSInteger) messageRate        { return messageRate; }
+- (NSInteger) messageRate     { return messageRate; }
 - (BOOL)      cancelled       { return canceled; }
 - (void)      markAsCanceled  { canceled = YES;  }
 
-
 #pragma mark ***Measurements
+- (void) bufferMeasurement:(ORInFluxDBMeasurement*)aCmd
+{
+    [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(cmdFlush) object:nil];
+    [self performSelector:@selector(cmdFlush) withObject:nil afterDelay:2];
+
+    if(measurementTimeOut==0 || maxLineCount==0){
+        [self sendCmd:aCmd];
+    }
+    else {
+        NSString* aBucket = [aCmd bucket];
+        if(!cmdBuffer) cmdBuffer = [[NSMutableDictionary alloc] init];
+        if(![cmdBuffer objectForKey:aBucket]){
+            [cmdBuffer setObject:[NSMutableDictionary dictionary] forKey:aBucket];
+        }
+        NSMutableDictionary* dict = [cmdBuffer objectForKey:aBucket];
+        if(![dict objectForKey:@"kTimeStamp"])[dict setObject:[NSDate date] forKey:@"kTimeStamp"];
+        if(![dict objectForKey:@"kCmdArray"]) [dict setObject:[NSMutableArray array] forKey:@"kCmdArray"];
+        NSMutableArray* cmds = [dict objectForKey:@"kCmdArray"];
+        [cmds addObject:aCmd];
+        if([cmds count]>maxLineCount){
+            [self consolidateAndSendCmdArray:cmds];
+        }
+    }
+}
+
+- (void) cmdFlush
+{
+    @synchronized (self) {
+        for(id aBucket in cmdBuffer){
+            NSMutableDictionary* dict = [cmdBuffer objectForKey:aBucket];
+            NSDate* timeStamp = [dict objectForKey:@"kTimeStamp"];
+            if(fabs([timeStamp timeIntervalSinceNow])>measurementTimeOut){
+                [self consolidateAndSendCmdArray:[dict objectForKey:@"kCmdArray"]];
+            }
+        }
+        [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(cmdFlush) object:nil];
+        [self performSelector:@selector(cmdFlush) withObject:nil afterDelay:measurementTimeOut];
+    }
+}
+
+- (void) consolidateAndSendCmdArray:(NSMutableArray*)cmds
+{
+    if([cmds count]==0)return;
+    ORInFluxDBMeasurement* firstCmd = [cmds firstObject]; //need the bucket and org. will be same for all here
+    ORInFluxDBCmdLineMode* aCombinedCmd = [ORInFluxDBCmdLineMode lineModeForBucket:[firstCmd bucket] org:[firstCmd org]];
+    for(ORInFluxDBMeasurement* aCmd in cmds){
+        [aCombinedCmd appendLine:[aCmd cmdLine]];
+    }
+    [cmds removeAllObjects];
+
+    [self executeDBCmd:aCombinedCmd];
+}
+
 - (void) sendCmd:(ORInFluxDBCmd*)aCmd
 {
     if(!processThread){
@@ -352,149 +507,168 @@ static NSString* ORInFluxDBModelInConnector = @"ORInFluxDBModelInConnector";
         messageQueue = [[ORSafeQueue alloc] init];
     }
     [messageQueue enqueue:aCmd];
+    
+    if(([self connectionStatus]==kInFluxDBConnectionOK) && connectionAlarm && [connectionAlarm acknowledged]){
+        [connectionAlarm clearAlarm];
+        [connectionAlarm release];
+        connectionAlarm = nil;
+    }
 }
 
-- (void) postStatusLogMessage:(NSNotification*)aNote
+- (void) processStatusLogLine:(NSNotification*)aNote
 {
+    BOOL userMessage = NO;
     NSAttributedString* s = [[aNote userInfo] objectForKey:@"Log"];
-             
+    
+    //could be a user entered message
+    if(!s){
+        userMessage = YES;
+        s = [[aNote userInfo]objectForKey:@"UserMessage"];
+    }
+        
+    __block NSString* tags = @"level=0";
+
     [s enumerateAttribute:(NSString *) NSForegroundColorAttributeName
                                      inRange:NSMakeRange(0, [s length])
     options:NSAttributedStringEnumerationLongestEffectiveRangeNotRequired
                                   usingBlock:^(id value, NSRange range, BOOL *stop) {
         
-        if([[value className] isEqualToString:@"_NSTaggedPointerColor"]){
-            
-  //          printf("got it\n");
+        if([[value description] isEqualToString:@"_NSTaggedPointerColor"]){
+            NSString* subString = [value description];
+            //sRGB IEC61966-2.1 colorspace 1 0 0 1
+ //           if([s rangeOfString:@"sRGB"].location != NSNotFound){
+                NSArray* parts = [subString componentsSeparatedByString:@" "];
+                //sRGB IEC61966-2.1 colorspace 1 0 0 1
+                if([parts count]>=6){
+                    if([[parts objectAtIndex:3]intValue]==1 &&
+                       [[parts objectAtIndex:4]intValue]==0 &&
+                       [[parts objectAtIndex:5]intValue]==0 ){
+                        tags = @"level=1";
+                    }
+                    else if([[parts objectAtIndex:3]intValue]==0 &&
+                            [[parts objectAtIndex:4]intValue]==1 &&
+                            [[parts objectAtIndex:5]intValue]==0 ){
+                        tags = @"level=2";
+                    }
+                }
+            }
+//        }
+        }];
+
+    NSString* measurementName;
+    if (userMessage)
+        measurementName = @"UserMessage";
+    else
+        measurementName = @"StatusLog";
+
+    ORInFluxDBMeasurement* aCmd = [ORInFluxDBMeasurement measurementForBucket:@"Logs" org:org];
+    [aCmd   start  : measurementName withTags:tags];
+    [aCmd addField: @"Line"     withString:[s string]];
+    [aCmd setTimeStamp: [[NSDate date]timeIntervalSince1970] ];
+    [self executeDBCmd:aCmd];
+
+}
+
+- (NSString*) errorString
+{
+    return errorString;
+}
+
+- (void) setErrorString:(NSString*)anError
+{
+    [errorString autorelease];
+    errorString = [anError copy];
+    [[NSNotificationCenter defaultCenter] postNotificationOnMainThreadWithName:ORInFluxDBErrorChanged
+                                    object:self
+                                  userInfo:nil
+                             waitUntilDone:NO];
+
+}
+
+- (void) updateAlarmState:(ORAlarm*)anAlarm
+{
+    ORRunModel*   rc    = [[(ORAppDelegate*)[NSApp delegate] document] findObjectWithFullID:@"ORRunModel,1"];
+    NSString* alarmName = [[anAlarm name]stringByReplacingOccurrencesOfString:@" " withString:@"_"];
+    NSString* help      = [anAlarm helpString];
+    NSInteger firstLF   = [help rangeOfString:@"\n"].location;
+    help                = [help substringFromIndex:firstLF];
+
+    NSString* stateName ;
+    if ([anAlarm isPosted]) {
+        if ([anAlarm acknowledged]) {
+            stateName = @"ack";
+        } else {
+            stateName = [anAlarm severityName];
         }
-                                  }];
-     
+    } else {
+        stateName = @"clear";
+    }
 
-
-    ORInFluxDBMeasurement* aCmd = [ORInFluxDBMeasurement measurementForBucket:@"ORCA" org:org];
-    [aCmd   start  : @"StatusLog" withTags:@"Type=List"];
-    [aCmd addString: @"Log"     withValue:[s string]];
+    ORInFluxDBMeasurement* aCmd = [ORInFluxDBMeasurement measurementForBucket:@"Alarms" org:org];
+    [aCmd start:    @"Alarm"];
+    [aCmd addTag:   @"Severity"      withString:[anAlarm severityName]];
+    [aCmd addField: alarmName         withString:stateName];
+//        [aCmd addTag: @"Help"          withString:help];
+    [aCmd addTag: @"RunNumber"    withLong:[rc runNumber]];
+    [aCmd addTag: @"SubRunNumber" withLong:[rc subRunNumber]];
+//        [aCmd setTimeStamp:[anAlarm timePostedUnixTimestamp]];
+    [aCmd setTimeStamp:[[NSDate date]timeIntervalSince1970]];
     [self executeDBCmd:aCmd];
 }
 
 - (void) alarmPosted:(NSNotification*)aNote
 {
     if(!stealthMode){
-        ORAlarm* alarm = [aNote object];
-        NSString* alarmName = [[alarm name]stringByReplacingOccurrencesOfString:@" " withString:@"_"];
-        ORInFluxDBMeasurement* aCmd = [ORInFluxDBMeasurement measurementForBucket:@"Alarms" org:org];
-        [aCmd   start  : alarmName       withTags:@"Type=CurrentAlarm"];
-        [aCmd addString: @"Severity"     withValue:[alarm severityName]];
-        [aCmd addString: @"Acknowledged" withValue:@"NO"];
-        [aCmd addString: @"Posted"       withValue:[alarm timePosted]];
-        [self executeDBCmd:aCmd];
-     }
+        [self updateAlarmState:[aNote object]];
+    }
 }
 
 - (void) alarmAcknowledged:(NSNotification*)aNote
 {
     if(!stealthMode){
-        ORAlarm* alarm = [aNote object];
-        NSString* alarmName = [[alarm name]stringByReplacingOccurrencesOfString:@" " withString:@"_"];
-        [self deleteAlarm:alarmName];
-        ORInFluxDBMeasurement* aCmd = [ORInFluxDBMeasurement measurementForBucket:@"Alarms" org:org];
-        [aCmd     start: alarmName       withTags:@"Type=CurrentAlarm"];
-        [aCmd addString: @"Severity"     withValue:[alarm severityName]];
-        [aCmd addString: @"Acknowledged" withValue:@"YES"];
-        [aCmd addString: @"Posted"       withValue:[alarm timePosted]];
-        [self executeDBCmd:aCmd];
-      }
+        [self updateAlarmState:[aNote object]];
+    }
 }
 
 - (void) alarmCleared:(NSNotification*)aNote
 {
-    ORAlarm* alarm = [aNote object];
-    NSString* alarmName = [[alarm name]stringByReplacingOccurrencesOfString:@" " withString:@"_"];
-    [self deleteAlarm:alarmName];
-    ORInFluxDBMeasurement* aCmd = [ORInFluxDBMeasurement measurementForBucket:@"Alarms" org:org];
-    [aCmd     start: @"AlarmHistory"  withTags:@"Type=List"];
-    [aCmd addString: @"Severity"      withValue:[alarm severityName]];
-    [aCmd addString: @"Alarm"         withValue:alarmName];
-    [aCmd addString: @"Posted"        withValue:[alarm timePosted]];
-    [aCmd addString: @"Cleared"       withValue:[[NSDate date]stdDescription]];
-    [self executeDBCmd:aCmd];
-}
-
-- (void) deleteAlarm:(NSString*)name
-{
-    NSDate* slightlyInFuture = [NSDate dateWithTimeIntervalSinceNow:+2];
-    NSString* pred = [NSString stringWithFormat:@"_measurement=\"%@\"",name];
-    ORInFluxDBDeleteSelectedData* aCmd = [ORInFluxDBDeleteSelectedData deleteSelectedData:@"Alarms"
-                                                                                      org:org
-                                                                                    start:@"2023-01-01T00:00:00Z"
-                                                                                     stop:[NSDate dateInRFC3339Format:slightlyInFuture]
-                                                                                predicate:pred];
-    [self executeDBCmd:aCmd];
-}
-
-- (void) updateRunInfo
-{
     if(!stealthMode){
-        NSArray* runObjects = [[self document] collectObjectsOfClass:NSClassFromString(@"ORRunModel")];
-        if([runObjects count]){
-            ORRunModel* rc = [runObjects objectAtIndex:0];
-            if(rc)[self updateRunState:rc];
-        }
+        [self updateAlarmState:[aNote object]];
     }
 }
 
-- (void) updateRunState:(ORRunModel*)rc
+- (void) updateRunState:(ORRunModel*)rc running:(BOOL)isRunning
 {
     scheduledForRunInfoUpdate = NO;
 
     if(!stealthMode){
         ORInFluxDBMeasurement* aCmd = [ORInFluxDBMeasurement measurementForBucket:@"ORCA" org:org];
-        [aCmd   start:   @"CurrentRun"  withTags:@"Type=Status"];
-        [aCmd addString: @"Number"      withValue:[rc fullRunNumberString]];
-        [aCmd addString: @"State"       withValue:[rc shortStatus]];
-        [aCmd addLong:   @"ElapsedTime" withValue:[rc elapsedRunTime]];
-        [aCmd addLong:   @"TimeToGo"    withValue:(long)[rc timeToGo]];
-        [aCmd addLong:   @"RunType"     withValue:[rc runType]];
-        [aCmd addString: @"TimedRun"    withValue:[rc timedRun]?@"YES":@"NO"];
-        [aCmd addString: @"RunMode"     withValue:[[ORGlobal sharedGlobal] runMode] == kNormalRun?@"Normal":@"OffLine"];
-        if([rc timedRun]){
-            [aCmd addString: @"Repeating" withValue:[rc repeatRun]?@"Yes":@"No"];
-            [aCmd addLong:   @"Length"  withValue:[rc timeLimit]];
-        }
-        [aCmd addString:   @"StartTime"  withValue:[[rc startTime]stdDescription]];
-        
+        [aCmd    start: @"CurrentRun"  withTags:@"Type=Status"];
+        [aCmd addField: @"RunNumber"   withLong:[rc runNumber]];
+        [aCmd addField: @"SubRunNumber" withLong:[rc subRunNumber]];
+        [aCmd addField: @"Running"     withBoolean:isRunning];
+        [aCmd addField: @"ElapsedTime" withLong:[rc elapsedRunTime]];
+        [aCmd addField: @"TimeToGo"    withLong:(long)[rc timeToGo]];
+        [aCmd addField: @"RunType"     withLong:[rc runType]];
+        [aCmd addField: @"TimedRun"    withBoolean:[rc timedRun]];
+        [aCmd addField: @"RunMode"     withString:[[ORGlobal sharedGlobal] runMode] == kNormalRun?@"Normal":@"OffLine"];
+        [aCmd addField: @"Repeating"   withBoolean:[rc repeatRun]];
+        if([rc timedRun])[aCmd addField: @"Length"  withLong:[rc timeLimit]];
+        else             [aCmd addField: @"Length"  withLong:0];
+
+        [aCmd addField:   @"RunModeDesc" withString:[rc runTypesMaskString]];
         [self executeDBCmd:aCmd];
     }
-}
-
-- (void) runStatusChanged:(NSNotification*)aNote
-{
-    [self updateRunState:[aNote object]];
-    //[self updateDataSets];
-}
-
-- (void) cleanUpRunStatus
-{
-    //delete/cleanup the running status records. No need to keep.
-    ORInFluxDBDeleteSelectedData* aDeleteCmd;
-    NSDate* slightlyInFuture = [NSDate dateWithTimeIntervalSinceNow:+2];
-    aDeleteCmd = [ORInFluxDBDeleteSelectedData deleteSelectedData:@"ORCA"
-                                                              org:org
-                                                            start:@"2023-01-01T00:00:00Z"
-                                                             stop:[NSDate dateInRFC3339Format:slightlyInFuture]
-                                                        predicate:@"_measurement=\"CurrentRun\""];
-      [self executeDBCmd:aDeleteCmd];
 }
 
 - (void) runStarted:(NSNotification*)aNote
 {
     if(!stealthMode){
-        [self cleanUpRunStatus];
         ORRunModel* rc  = [aNote object];
-        [self updateRunState:rc];
+        [self updateRunState:rc running:YES];
         [runNumberString release];
         runNumberString = [rc fullRunNumberString];
-        [self updateExperimentMetrics];
+        [[self nextObject] postInFluxSetUp];
     }
 }
 
@@ -504,33 +678,16 @@ static NSString* ORInFluxDBModelInConnector = @"ORInFluxDBModelInConnector";
     runNumberString = nil;
 
     if(!stealthMode){
-        [self updateRunState:[aNote object]];
-        ORRunModel* rc  = [aNote object];
-        //keep a record of all runs
-        if([[ORGlobal sharedGlobal] runMode] == kNormalRun){
-            ORInFluxDBMeasurement* aCmd = [ORInFluxDBMeasurement measurementForBucket:@"ORCA" org:org];
-            [aCmd     start: @"RunHistory"  withTags:@"Type=List"];
-            [aCmd addString: @"Number"      withValue:[rc fullRunNumberString]];
-            [aCmd   addLong: @"RunType"     withValue:[rc runType]];
-            [aCmd addDouble: @"Length"      withValue:[rc elapsedRunTime]];
-            [aCmd addString: @"StopTime"    withValue:[[NSDate date] stdDescription]];
-            [aCmd addString: @"StartTime"   withValue:[[rc startTime]stdDescription]];
-            [self executeDBCmd:aCmd];
-        }
-    }
-}
-
-- (void) runElapsedTimeChanged:(NSNotification*)aNote
-{
-    if(!scheduledForRunInfoUpdate){
-        scheduledForRunInfoUpdate = YES;
-        [self performSelector:@selector(updateRunState:) withObject:[aNote object] afterDelay:5];
+        [self updateRunState:[aNote object] running:NO];
+//        [self performSelector:@selector(updateExperiment) withObject:nil afterDelay:1];
     }
 }
 
 - (void) executeDBCmd:(id)aCmd
 {
-    [aCmd executeCmd:self];
+    @synchronized (self) {
+        [aCmd executeCmd:self];
+    }
 }
 
 - (NSString*) orgId
@@ -571,17 +728,30 @@ static NSString* ORInFluxDBModelInConnector = @"ORInFluxDBModelInConnector";
 {
     if(experimentName){
         [self executeDBCmd:[ORInFluxDBCreateBucket createBucket:experimentName
-                                                          orgId:[self orgId] expireTime:0]];
+                                                          orgId:[self orgId] expireTime:60*60*24*7]];
     }
-    [self executeDBCmd:[ORInFluxDBCreateBucket createBucket:@"ORCA"
+    [self executeDBCmd:[ORInFluxDBCreateBucket createBucket:@"Logs"
                                                       orgId:[self orgId] expireTime:60*60*24*60]];
+    
+    [self executeDBCmd:[ORInFluxDBCreateBucket createBucket:@"HWMaps"
+                                                      orgId:[self orgId] expireTime:60*60*24*60]];
+
+    [self executeDBCmd:[ORInFluxDBCreateBucket createBucket:@"ORCA"
+                                                      orgId:[self orgId] expireTime:60*60*24*14]];
+    
     [self executeDBCmd:[ORInFluxDBCreateBucket createBucket:@"Sensors"
                                                       orgId:[self orgId] expireTime:60*60*24*60]];
+    
     [self executeDBCmd:[ORInFluxDBCreateBucket createBucket:@"Computer"
                                                       orgId:[self orgId] expireTime:60*60*24*10]];
+    
     [self executeDBCmd:[ORInFluxDBCreateBucket createBucket:@"Alarms"
-                                                      orgId:[self orgId] expireTime:0]];
+                                                      orgId:[self orgId] expireTime:60*60*24*10]];
 
+    [self executeDBCmd:[ORInFluxDBCreateBucket createBucket:@"SlowControls"
+                                                      orgId:[self orgId] expireTime:60*60*24*10]];
+
+    
     [self performSelector:@selector(executeDBCmd:) withObject:[ORInFluxDBListBuckets listBuckets] afterDelay:1];
 }
 
@@ -590,11 +760,12 @@ static NSString* ORInFluxDBModelInConnector = @"ORInFluxDBModelInConnector";
 {
     self = [super initWithCoder:decoder];
     [[self undoManager]  disableUndoRegistration];
-    [self setHostName:   [decoder decodeObjectForKey    : @"HostName"]];
-    [self setPortNumber: [decoder decodeIntegerForKey   : @"PortNumber"]];
-    [self setAuthToken:  [decoder decodeObjectForKey    : @"Token"]];
-    [self setOrg:        [decoder decodeObjectForKey    : @"Org"]];
-    [self setExperimentName: [decoder decodeObjectForKey: @"experimentName"]];
+    [self setHostName:   [decoder decodeObjectForKey     : @"HostName"]];
+    [self setAuthToken:  [decoder decodeObjectForKey     : @"Token"]];
+    [self setOrg:        [decoder decodeObjectForKey     : @"Org"]];
+    [self setExperimentName: [decoder decodeObjectForKey : @"experimentName"]];
+    [self setMeasurementTimeOut: [decoder decodeIntForKey: @"measurementTimeOut"]];
+    [self setMaxLineCount: [decoder decodeIntForKey      : @"maxLineCount"]];
     [[self undoManager]  enableUndoRegistration];
     [self registerNotificationObservers];
     return self;
@@ -603,11 +774,12 @@ static NSString* ORInFluxDBModelInConnector = @"ORInFluxDBModelInConnector";
 - (void)encodeWithCoder:(NSCoder*)encoder
 {
     [super encodeWithCoder:encoder];
-    [encoder encodeInteger:portNumber    forKey: @"PortNumber"];
     [encoder encodeObject:hostName       forKey: @"HostName"];
     [encoder encodeObject:authToken      forKey: @"Token"];
     [encoder encodeObject:org            forKey: @"Org"];
     [encoder encodeObject:experimentName forKey: @"experimentName"];
+    [encoder encodeInt:measurementTimeOut forKey: @"measurementTimeOut"];
+    [encoder encodeInt:maxLineCount      forKey: @"maxLineCount"];
 }
 
 - (void) _cancelAllPeriodicOperations
@@ -617,9 +789,8 @@ static NSString* ORInFluxDBModelInConnector = @"ORInFluxDBModelInConnector";
 
 - (void) _startAllPeriodicOperations
 {
-    [self performSelector:@selector(updateMachineRecord) withObject:nil afterDelay:2];
-    [self performSelector:@selector(updateExperimentRates)         withObject:nil afterDelay:3];
-    [self performSelector:@selector(updateRunInfo)       withObject:nil afterDelay:4];
+    [self performSelector:@selector(updateMachineRecord)         withObject:nil afterDelay:2];
+    [self performSelector:@selector(updateExperimentDuringRun)   withObject:nil afterDelay:3];
 }
 
 - (void) updateMachineRecord
@@ -633,7 +804,7 @@ static NSString* ORInFluxDBModelInConnector = @"ORInFluxDBModelInConnector";
             [self updateDiskInfo];
         }
         @catch (NSException* e){
-            NSLog(@"%@ %@ Exception: %@\n",[self fullID],NSStringFromSelector(_cmd),e);
+            NSLog(@"%@ %@ updateMachineRecord Exception: %@\n",[self fullID],NSStringFromSelector(_cmd),e);
         }
         @finally {
             [self performSelector:@selector(updateMachineRecord) withObject:nil afterDelay:60];
@@ -648,9 +819,10 @@ static NSString* ORInFluxDBModelInConnector = @"ORInFluxDBModelInConnector";
     
     ORInFluxDBMeasurement* aMeasurement;
     aMeasurement  = [ORInFluxDBMeasurement measurementForBucket:@"ORCA" org:org];
-    [aMeasurement start:@"ORCAStatus" withTags:@"Type=Resources"];
-    [aMeasurement addLong:@"Uptime" withValue:uptime];
-    [aMeasurement addLong:@"Memory" withValue:memory];
+    [aMeasurement start    : @"ORCAStatus"   withTags:@"Type=Resources"];
+    [aMeasurement addField : @"Uptime"       withLong:uptime];
+    [aMeasurement addField : @"Memory"       withLong:memory];
+    [aMeasurement addField : @"ComputerName" withString:computerName()];
     [self executeDBCmd:aMeasurement];
 }
 
@@ -671,9 +843,9 @@ static NSString* ORInFluxDBModelInConnector = @"ORInFluxDBModelInConnector";
             double percentUsed = 100*(totalSpace-freeSpace)/totalSpace;
             ORInFluxDBMeasurement* aMeasurement  = [ORInFluxDBMeasurement measurementForBucket:@"Computer" org:org];
             [aMeasurement start:@"DiskInfo" withTags:[NSString stringWithFormat:@"Disk=%@",aVolume]];
-            [aMeasurement addDouble:@"FreeSpace"   withValue:freeSpace];
-            [aMeasurement addDouble:@"TotalSpace"  withValue:totalSpace];
-            [aMeasurement addDouble:@"PercentUsed" withValue:percentUsed];
+            [aMeasurement addField:@"FreeSpace"   withDouble:freeSpace];
+            [aMeasurement addField:@"TotalSpace"  withDouble:totalSpace];
+            [aMeasurement addField:@"PercentUsed" withDouble:percentUsed];
             [self executeDBCmd:aMeasurement];
         }
     }
@@ -705,6 +877,7 @@ static NSString* ORInFluxDBModelInConnector = @"ORInFluxDBModelInConnector";
         id aName;
         while(aName = [e nextObject]){
             if([aName rangeOfString:@".0.0."].location == NSNotFound){
+                [thisHostAddress release];
                 thisHostAddress = [aName copy];
                 break;
             }
@@ -713,87 +886,29 @@ static NSString* ORInFluxDBModelInConnector = @"ORInFluxDBModelInConnector";
     
     if(thisHostAddress){
         ORInFluxDBMeasurement* aMeasurement = [ORInFluxDBMeasurement measurementForBucket:@"Computer" org:org];
-        [aMeasurement start:@"Identity" withTags:[NSString stringWithFormat:@"Name=%@",computerName()]];
-        [aMeasurement addString:@"hwAddress" withValue:macAddress()];
-        [aMeasurement addString:@"ipAddress" withValue:thisHostAddress];
+        [aMeasurement start:   @"Identity"     withTags:@"Type=Status"];
+        [aMeasurement addField:@"CurrentTime"  withLong:[[NSDate date]timeIntervalSince1970]];
+        [aMeasurement addField:@"ComputerName" withString:computerName()];
+        [aMeasurement addField:@"HwAddress"    withString:macAddress()];
+        [aMeasurement addField:@"IPAddress"    withString:thisHostAddress];
         [self executeDBCmd:aMeasurement];
     }
 }
 
-- (void) updateExperimentMetrics
+- (void) updateExperimentDuringRun
 {
-    if(!stealthMode && runNumberString!=nil){
+    if(!stealthMode){
+        [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(updateExperimentDuringRun) object:nil];
         @try {
-            ORExperimentModel* experiment = [self nextObject];
-            int numGroups = [experiment numberOfSegmentGroups];
-            for(int aSet=0;aSet<numGroups;aSet++){
-                ORSegmentGroup* segmentGroup = [experiment segmentGroup:aSet];
-                int numSegments = [experiment numberSegmentsInGroup:aSet];
-                ORInFluxDBMeasurement* aCmd = [ORInFluxDBMeasurement measurementForBucket:experimentName org:org];
-                for(int i = 0; i<numSegments; i++){
-                    ORDetectorSegment* aSegment = [segmentGroup segment:i];
-                    NSString* tags = [NSString stringWithFormat:@"groupName = %@,crate=%d,card=%d,chan=%d",
-                                      [segmentGroup groupName],[aSegment crateNumber],[aSegment cardSlot],[aSegment channel]];
-                    [aCmd start  :@"Metrics"      withTags:tags];
-                    [aCmd addLong:@"Threshold"  withValue:[segmentGroup getThreshold:i]];
-                    [aCmd addLong:@"Online"     withValue:[segmentGroup online:i]];
-                    [aCmd addLong:@"Gain"       withValue:[segmentGroup getGain:i]];
-                    [self executeDBCmd:aCmd];
-                }
-                
-                //NSArray* mapEntries = [[segmentGroup paramsAsString] componentsSeparatedByString:@"\n"];
-                //if([mapEntries count])      [aDictionary setObject:mapEntries       forKey: @"geometry"];
-                
-                
-                
-                //            NSArray* totalRateArray = [[[experiment segmentGroup:aSet] totalRate] ratesAsArray];
-                //            if(totalRateArray)[aDictionary setObject:totalRateArray forKey:@"totalRate"];
-                //
-                //            [values setObject:aDictionary forKey:[segmentGroup groupName]];
-            }
-            
-            //        NSMutableDictionary* aDictionary= [NSMutableDictionary dictionary];
-            //        NSArray* stringMapEntries = [[self stringMapFileAsString] componentsSeparatedByString:@"\n"];
-            //        [aDictionary setObject:stringMapEntries forKey: @"geometry"];
-            //        [values setObject:aDictionary           forKey:@"Strings"];
-            //
-            //        aDictionary= [NSMutableDictionary dictionary];
-            //        NSArray* specialMapEntries = [[self specialMapFileAsString] componentsSeparatedByString:@"\n"];
-            //        [aDictionary setObject:specialMapEntries forKey: @"list"];
-            //        [values setObject:aDictionary           forKey:@"SpecialChannels"];
-        }
-        @catch(NSException* e){
-            
-        }
-    }
-}
-
-- (void) updateExperimentRates
-{
-    if(!stealthMode && runNumberString!=nil){
-        @try {
-            ORExperimentModel* experiment = [self nextObject];
-            int numGroups = [experiment numberOfSegmentGroups];
-            for(int aSet=0;aSet<numGroups;aSet++){
-                ORSegmentGroup* segmentGroup = [experiment segmentGroup:aSet];
-                int numSegments = [experiment numberSegmentsInGroup:aSet];
-                ORInFluxDBMeasurement* aCmd = [ORInFluxDBMeasurement measurementForBucket:experimentName org:org];
-                for(int i = 0; i<numSegments; i++){
-                    ORDetectorSegment* aSegment = [segmentGroup segment:i];
-                    NSString* tags = [NSString stringWithFormat:@"groupName = %@,runNumber=%@,crate=%d,card=%d,chan=%d",
-                                      [segmentGroup groupName],runNumberString,[aSegment crateNumber],[aSegment cardSlot],[aSegment channel]];
-                    [aCmd start:@"Metrics"      withTags:tags];
-                    [aCmd addLong:@"TotalCount" withValue:[segmentGroup getTotalCounts:i]];
-                    [aCmd addLong:@"Rate"       withValue:[segmentGroup getRate:i]];
-                    [self executeDBCmd:aCmd];
-                }
+            if([[ORGlobal sharedGlobal] runRunning]){
+                [[self nextObject] postInFluxRunTime];
             }
         }
-        @catch(NSException* e){
-            
+        @catch (NSException* e){
+            NSLog(@"%@ %@ updateExperimentDuringRun Exception: %@\n",[self fullID],NSStringFromSelector(_cmd),e);
         }
-        @finally{
-            [self performSelector:@selector(updateExperimentRates) withObject:nil afterDelay:60];
+        @finally {
+            [self performSelector:@selector(updateExperimentDuringRun) withObject:nil afterDelay:30];
         }
     }
 }
@@ -872,7 +987,15 @@ static NSString* ORInFluxDBModelInConnector = @"ORInFluxDBModelInConnector";
     }
     else NSLog(@"No organizations found\n");
 }
+
+
 #pragma mark ***Thread
+//-----------------------------------------------------
+// here we accumulate measurements under either 5 seconds
+// has lapsed since first measurement in the group
+// or we have >4000 lines in the buffer. A complication is
+// that we have to keep track for each bucket
+//-----------------------------------------------------
 - (void)sendMeasurments
 {
     NSAutoreleasePool* outerPool = [[NSAutoreleasePool alloc] init];
@@ -883,32 +1006,41 @@ static NSString* ORInFluxDBModelInConnector = @"ORInFluxDBModelInConnector";
     do {
         NSAutoreleasePool* pool = [[NSAutoreleasePool alloc] init];
         id     aCmd = [messageQueue dequeue];
-        if([aCmd isKindOfClass:NSClassFromString(@"ORInFluxDBDelayCmd")]){
-            [ORTimer delay:[(ORInFluxDBDelayCmd*)aCmd delayTime]];
-        }
-        else if(aCmd){
+        if(aCmd!=nil){
             NSMutableURLRequest* request = [aCmd requestFrom:self];
-            NSURLSessionConfiguration* config = [NSURLSessionConfiguration defaultSessionConfiguration];
-            NSURLSession*             session = [NSURLSession sessionWithConfiguration:config];
-            NSURLSessionDataTask*      dbTask = [session dataTaskWithRequest:request completionHandler:^(NSData* data, NSURLResponse* response, NSError* error) {
-                if (!error) {
-                    NSDictionary* result = [NSJSONSerialization JSONObjectWithData: data
-                                                                           options: kNilOptions
-                                                                             error: &error];
-                    NSHTTPURLResponse *httpResponse = (NSHTTPURLResponse *) response;
-                    [aCmd logResult:result code:(int)[httpResponse statusCode] delegate:self];
-                }
-            }];
-            
-            [dbTask resume]; //task is created in paused state, so start it
-            
-            totalSent += [aCmd requestSize];
+            if(request){
+                NSURLSessionConfiguration* config = [NSURLSessionConfiguration defaultSessionConfiguration];
+                NSURLSession*             session = [NSURLSession sessionWithConfiguration:config];
+                NSURLSessionDataTask*      dbTask = [session dataTaskWithRequest:request
+                                                               completionHandler:^(NSData* data,
+                                                                                   NSURLResponse* response,
+                                                                                   NSError* error) {
+                    if (!error) {
+                        NSDictionary* result = [NSJSONSerialization JSONObjectWithData: data
+                                                                               options: kNilOptions
+                                                                                 error: &error];
+                        NSHTTPURLResponse *httpResponse = (NSHTTPURLResponse *) response;
+                        [aCmd logResult:result code:(int)[httpResponse statusCode] delegate:self];
+                        [self performSelectorOnMainThread:@selector(setConnectionStatusOK)
+                                               withObject:nil
+                                            waitUntilDone:NO];
+                    }
+                    else {
+                        [self performSelectorOnMainThread:@selector(setConnectionStatusBad)
+                                               withObject:nil
+                                            waitUntilDone:NO];
+                    }
+                }];
+                    
+                [dbTask resume]; //task is created in paused state, so start it
+                    
+                totalSent += [aCmd requestSize];
+            }
         }
-        [NSThread sleepForTimeInterval:.01];
         [pool release];
+        if([self connectionStatus] == kInFluxDBConnectionBad) [NSThread sleepForTimeInterval:1.0];
+        else [NSThread sleepForTimeInterval:.01];
     }while(!canceled);
     [outerPool release];
 }
 @end
-
-

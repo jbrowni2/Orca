@@ -19,6 +19,7 @@
 
 #import "ORExperimentModel.h"
 #import "ORInFluxDBModel.h"
+#import "ORHistoModel.h"
 
 @class ORRunModel;
 
@@ -29,13 +30,23 @@
 #define kL200MuonVetoChans    66
 #define kL200MaxAuxChans       6
 #define kL200MaxCC4s          24*7
+#define kL200MaxADCCards      14*4
 
 @interface ORL200Model : ORExperimentModel
 {
     int viewType;
     uint32_t runType;
     ORInFluxDBModel* influxDB;
+    ORRunModel*      rc;
     int influxIndex;
+    BOOL linked;
+    bool updateDataFilePath;
+    //----------------------
+    int dataPeriod;
+    int dataCycle;
+    int dataType;
+    NSString* customType;
+    NSString* l200FileName;
 }
 
 #pragma mark •••Accessors
@@ -49,6 +60,18 @@
 - (void) setAuxChanPositions;
 - (void) findInFluxDB;
 - (void) runTypeChanged:(NSNotification*) aNote;
+- (void) updateDataFilePath:(NSNotification*)aNote;
+//----------------------
+- (int)       dataPeriod;
+- (void)      setDataPeriod:(int)aValue;
+- (int)       dataCycle;
+- (void)      setDataCycle:(int)aValue;
+- (int)       dataType;
+- (void)      setDataType:(int)aValue;
+- (NSString*) customType;
+- (void)      setCustomType:(NSString*)aType;
+- (NSString*) l200FileName;
+- (void) setL200FileName:(NSString*)s;
 
 #pragma mark •••Segment Group Methods
 - (void) showDataSet:(NSString*)name forSet:(int)aSet segment:(int)index;
@@ -58,6 +81,7 @@
 - (BOOL) validatePMT:(int)index;
 - (BOOL) validateAuxChan:(int)index;
 - (BOOL) validateCC4:(int)index;
+- (BOOL) validateADC:(int)index;
 - (NSString*) valueForLabel:(NSString*)label fromParts:(NSArray*)parts;
 
 #pragma mark •••Archival
@@ -67,6 +91,11 @@
 @end
 
 extern NSString* ORL200ModelViewTypeChanged;
+extern NSString* ORL200ModelDataCycleChanged;
+extern NSString* ORL200ModelDataPeriodChanged;
+extern NSString* ORL200ModelDataTypeChanged;
+extern NSString* ORL200ModelCustomTypeChanged;
+extern NSString* ORL200ModelL200FileNameChanged;
 
 @interface ORL200HeaderRecordID : NSObject
 - (NSString*) fullID;

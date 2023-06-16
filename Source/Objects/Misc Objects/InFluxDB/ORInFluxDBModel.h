@@ -23,24 +23,30 @@
 @class ORInFluxDB;
 @class ORAlarm;
 @class ORSafeQueue;
-
 #import "ORInFluxDBCmd.h"
+
+typedef enum { kInFluxDBConnectionBad,
+               kInFluxDBConnectionOK,
+               kInFluxDBConnectionUnknown } ORInFluxDBConnectionStatus;
 
 @interface ORInFluxDBModel : OrcaObject
 {
 @private
     NSString*      hostName;
-    NSInteger      portNumber;
     NSTimer*       timer;
     NSInteger      totalSent;
     NSInteger      messageRate;
     BOOL           stealthMode;
     BOOL           scheduledForRunInfoUpdate;
-    NSString*      alertMessage;
-    int            alertType;
+    //NSString*      alertMessage;
+    //int            alertType;
     NSString*      thisHostAddress;
     NSString*      experimentName;
     NSString*      runNumberString;
+    NSString*      errorString;
+    short          measurementTimeOut;
+    short          maxLineCount;
+    
     //----queue thread--------
     bool           canceled;
     NSThread*      processThread;
@@ -49,9 +55,13 @@
     NSMutableArray* bucketArray;
     NSArray*       orgArray;
     NSString*      org;
+    NSMutableDictionary* cmdBuffer;
     
     //----http vars--------
     NSString*      authToken;
+    ORInFluxDBConnectionStatus connectionStatus;
+    ORAlarm*                   connectionAlarm;
+    NSDate*                    lastAlarmDate;
 }
 
 #pragma mark ***Initialization
@@ -61,15 +71,16 @@
 #pragma mark ***Notifications
 - (void) registerNotificationObservers;
 - (void) applicationIsTerminating : (NSNotification*)aNote;
-- (void) runElapsedTimeChanged    : (NSNotification*)aNote;
-- (void) runStatusChanged         : (NSNotification*)aNote;
 - (void) alarmPosted              : (NSNotification*)aNote;
 - (void) alarmCleared             : (NSNotification*)aNote;
 - (void) alarmAcknowledged        : (NSNotification*)aNote;
 
 #pragma mark ***Accessors
-- (void)        setPortNumber:(NSUInteger)aPort;
-- (NSUInteger)  portNumber;
+- (ORInFluxDBConnectionStatus) connectionStatus;
+- (void)        setConnectionStatus:(ORInFluxDBConnectionStatus)status;
+- (void)        setConnectionStatusBad;
+- (void)        setConnectionStatusOK;
+- (void)        setConnectionStatusUnknown;
 - (NSString*)   experimentName;
 - (void)        setExperimentName:(NSString*)aName;
 - (NSString*)   hostName;
@@ -90,11 +101,22 @@
 - (void)        createBuckets;
 - (void)        decodeOrgList:(NSDictionary*)result;
 - (void)        decodeBucketList:(NSDictionary*)result;
-- (void)        cleanUpRunStatus;
+- (NSString*)   errorString;
+- (void)        setErrorString:(NSString*)anError;
+- (short)       measurementTimeOut;
+- (void)        setMeasurementTimeOut:(short)aValue;
+- (short)       maxLineCount;
+- (void)        setMaxLineCount:(short)aValue;
+- (void)        cmdFlush;
 
 #pragma mark ***Thread
 - (void) sendCmd:(ORInFluxDBCmd*)aCmd;
+- (void) bufferMeasurement:(ORInFluxDBCmd*)aCmd;
 - (void) sendMeasurments;
+
+#pragma mark ***Scripting
+-(ORInFluxDBMeasurement*) cmdForBucket:(NSString*)aBucket;
+
 
 #pragma mark ***Archival
 - (id)   initWithCoder:(NSCoder*)decoder;
@@ -111,10 +133,9 @@ extern NSString* ORInFluxDBAuthTokenChanged;
 extern NSString* ORInFluxDBOrgChanged;
 extern NSString* ORInFluxDBStealthModeChanged;
 extern NSString* ORInFluxDBBucketChanged;
+extern NSString* ORInFluxDBErrorChanged;
+extern NSString* ORInFluxDBConnectionStatusChanged;
+extern NSString* ORInFluxDBMaxLineCountChanged;
+extern NSString* ORInFluxDBMeasurementTimeOutChanged;;
 
 extern NSString* ORInFluxDBLock;
-
-
-
-
-

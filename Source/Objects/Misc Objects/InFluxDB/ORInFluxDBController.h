@@ -21,29 +21,34 @@
 @interface ORInFluxDBController : OrcaObjectController
 {
     IBOutlet NSTextField*       hostNameField;
-    IBOutlet NSTextField*       portField;
     IBOutlet NSTextField*       orgField;
     IBOutlet NSTextField*       authTokenField;
     IBOutlet NSTextField*       rateField;
+    IBOutlet NSTextField*       connectionErrField;
     IBOutlet NSButton*          deleteBucketButton;
     IBOutlet NSButton*          InFluxDBLockButton;
     IBOutlet NSButton*          stealthModeButton;
     IBOutlet NSTextField*       dbStatusField;
     IBOutlet NSTableView*       bucketTableView;
+    IBOutlet ORTimedTextField*  errorField;
+    IBOutlet NSTextField*       measurementTimeOutField;
+    IBOutlet NSTextField*       maxLineCountField;
     IBOutlet ORValueBarGroupView* rate0;
-
 }
 
 #pragma mark ***Interface Management
 - (void) registerNotificationObservers;
 - (void) hostNameChanged:(NSNotification*)aNote;
-- (void) portChanged:(NSNotification*)aNote;
 - (void) authTokenChanged:(NSNotification*)aNote;
 - (void) orgChanged:(NSNotification*)aNote;
 - (void) inFluxDBLockChanged:(NSNotification*)aNote;
 - (void) rateChanged:(NSNotification*)aNote;
 - (void) stealthModeChanged:(NSNotification*)aNote;
 - (void) bucketArrayChanged:(NSNotification*)aNote;
+- (void) errorStringChanged:(NSNotification*)aNote;
+- (void) connectionStatusChanged:(NSNotification*)aNote;
+- (void) maxLineCountChanged:(NSNotification*)aNote;
+- (void) measurementTimeOutChanged:(NSNotification*)aNote;
 
 #pragma mark •••Actions
 - (IBAction) hostNameAction:(id)sender;
@@ -54,6 +59,8 @@
 - (IBAction) InFluxDBLockAction:(id)sender;
 - (IBAction) stealthModeAction:(id)sender;
 - (IBAction) createBucketsAction:(id)sender;
+- (IBAction) measurementTimeOutAction:(id)sender;
+- (IBAction) maxLineCountAction:(id)sender;
 
 #pragma mark •••Data Source Methods
 - (NSInteger)numberOfRowsInTableView:(NSTableView*)aTableView;

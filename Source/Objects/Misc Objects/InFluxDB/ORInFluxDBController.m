@@ -23,6 +23,7 @@
 #import "ORValueBarGroupView.h"
 #import "ORValueBar.h"
 #import "ORAxis.h"
+#import "ORTimedTextField.h"
 
 @implementation ORInFluxDBController
 
@@ -49,6 +50,7 @@
     [[rate0 xAxis] setLog:YES];
     [rate0 setNumber:1 height:10 spacing:4];
     [[rate0 xAxis] setRngLow:1 withHigh:10000];
+    [errorField setTimeOut:1.5];
 
     for(id aBar in [rate0 valueBars]){
         [aBar setBackgroundColor:[NSColor whiteColor]];
@@ -67,11 +69,6 @@
     [notifyCenter addObserver : self
                      selector : @selector(hostNameChanged:)
                          name : ORInFluxDBHostNameChanged
-                       object : model];
-    
-    [notifyCenter addObserver : self
-                     selector : @selector(portChanged:)
-                         name : ORInFluxDBPortNumberChanged
                        object : model];
     
     [notifyCenter addObserver : self
@@ -124,20 +121,41 @@
                          name : ORMiscAttributesChanged
                        object : model];
 
-
+    [notifyCenter addObserver : self
+                      selector : @selector(errorStringChanged:)
+                          name : ORInFluxDBErrorChanged
+                        object : model];
+    
+    [notifyCenter addObserver : self
+                      selector : @selector(connectionStatusChanged:)
+                          name : ORInFluxDBConnectionStatusChanged
+                        object : model];
+  
+    [notifyCenter addObserver : self
+                      selector : @selector(maxLineCountChanged:)
+                          name : ORInFluxDBMaxLineCountChanged
+                        object : model];
+ 
+    [notifyCenter addObserver : self
+                      selector : @selector(measurementTimeOutChanged:)
+                          name : ORInFluxDBMeasurementTimeOutChanged
+                        object : model];
 }
 
 - (void) updateWindow
 {
     [super updateWindow];
     [self hostNameChanged:nil];
-    [self portChanged:nil];
     [self authTokenChanged:nil];
     [self orgChanged:nil];
     [self inFluxDBLockChanged:nil];
     [self rateChanged:nil];
     [self stealthModeChanged:nil];
     [self bucketArrayChanged:nil];
+    [self errorStringChanged:nil];
+    [self connectionStatusChanged:nil];
+    [self maxLineCountChanged:nil];
+    [self measurementTimeOutChanged:nil];
 
 }
 //a fake action from the scale object so we can store the state
@@ -162,6 +180,37 @@
     }
 }
 
+- (void) connectionStatusChanged:(NSNotification*)aNote
+{
+    NSString* s;
+    if([model connectionStatus] == kInFluxDBConnectionOK) s = @"";
+    else if([model connectionStatus] == kInFluxDBConnectionBad){
+        [connectionErrField setTextColor:[NSColor redColor]];
+        s = @"NO Connection -- trying again soon";
+    }
+    else if([model connectionStatus] == kInFluxDBConnectionUnknown){
+        [connectionErrField setTextColor:[NSColor blackColor]];
+        s = @"Unknown connection status";
+    }
+    else return;
+    [connectionErrField setStringValue:s];
+}
+
+- (void) maxLineCountChanged:(NSNotification*)aNote
+{
+    [maxLineCountField setIntValue:[model maxLineCount]];
+}
+
+- (void) measurementTimeOutChanged:(NSNotification*)aNote
+{
+    [measurementTimeOutField setIntValue:[model measurementTimeOut]];
+}
+
+- (void) errorStringChanged:(NSNotification*)aNote
+{
+    [errorField setStringValue:[model errorString]];
+}
+
 - (void) stealthModeChanged:(NSNotification*)aNote
 {
     [stealthModeButton setIntValue: [model stealthMode]];
@@ -184,11 +233,6 @@
 	[hostNameField setStringValue:[model hostName]];
 }
 
-- (void) portChanged:(NSNotification*)aNote
-{
-    [portField setIntegerValue:[model portNumber]];
-}
-
 - (void) orgChanged:(NSNotification*)aNote
 {
     [orgField setStringValue:[model org]];
@@ -204,7 +248,6 @@
     BOOL locked = [gSecurity isLocked:ORInFluxDBLock];
     [InFluxDBLockButton   setState: locked];
     [hostNameField        setEnabled:!locked];
-    [portField            setEnabled:!locked];
     [authTokenField       setEnabled:!locked];
     [orgField             setEnabled:!locked];
     [stealthModeButton    setEnabled:!locked];
@@ -238,6 +281,15 @@
         }];
     }
     else [model setStealthMode:NO];
+}
+
+- (IBAction) measurementTimeOutAction:(id)sender
+{
+    [model setMeasurementTimeOut:[sender intValue]];
+}
+- (IBAction) maxLineCountAction:(id)sender
+{
+    [model setMaxLineCount:[sender intValue]];
 }
 
 - (IBAction) InFluxDBLockAction:(id)sender

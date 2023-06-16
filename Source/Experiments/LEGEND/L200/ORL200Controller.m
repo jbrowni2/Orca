@@ -20,6 +20,7 @@
 #import "ORL200Controller.h"
 #import "ORL200Model.h"
 #import "ORL200SegmentGroup.h"
+#import "ORFlashCamADCModel.h"
 #import "ORDetectorSegment.h"
 #import "ORDetectorView.h"
 #import "ORTimeLinePlot.h"
@@ -27,6 +28,7 @@
 #import "OR1DHistoPlot.h"
 #import "ORTimeAxis.h"
 #import "ORColorScale.h"
+#import "ORRunModel.h"
 
 
 @implementation ORL200Controller
@@ -41,6 +43,7 @@
 
 - (void) dealloc
 {
+    [rc release];
     [super dealloc];
 }
 
@@ -67,6 +70,12 @@
 {
     return @"~/L200CC4ChanMap.json";
 }
+
+- (NSString*) defaultADCSerialMapFilePath
+{
+    return @"~/L200ADCSerialMap.json";
+}
+
 - (void) awakeFromNib
 {
     [super awakeFromNib];
@@ -75,7 +84,7 @@
     [self populateClassNamePopup:pmtAdcClassNamePopup];
     [self populateClassNamePopup:auxChanAdcClassNamePopup];
     [self populateClassNamePopup:cc4AdcClassNamePopup];
-
+    
     [(ORPlot*) [ratePlot plotWithTag:kL200DetType] setLineColor:[NSColor systemBlueColor]];
     ORTimeLinePlot* sipmPlot = [[ORTimeLinePlot alloc] initWithTag:kL200SiPMType andDataSource:self];
     [sipmPlot setLineColor:[NSColor systemGreenColor]];
@@ -102,9 +111,9 @@
     [pmtHist setName:@"PMTs"];
     [valueHistogramsPlot addPlot:pmtHist];
     [pmtHist release];
-    OR1DHistoPlot* auxHist = [[OR1DHistoPlot alloc] initWithTag:10+kL200AuxType andDataSource:self];
-    [auxHist setLineColor:[NSColor systemOrangeColor]];
-    [auxHist setName:@"AuxChans"];
+//    OR1DHistoPlot* auxHist = [[OR1DHistoPlot alloc] initWithTag:10+kL200AuxType andDataSource:self];
+//    [auxHist setLineColor:[NSColor systemOrangeColor]];
+//    [auxHist setName:@"AuxChans"];
     
     [primaryColorScale setSpectrumRange:0.7];
     [sipmColorScale    setSpectrumRange:0.7];
@@ -129,6 +138,27 @@
 {
     NSNotificationCenter* notifyCenter = [NSNotificationCenter defaultCenter];
     [super registerNotificationObservers];
+
+    [notifyCenter addObserver : self
+                     selector : @selector(populateDataTypePopup)
+                         name : ORDocumentLoadedNotification
+                       object : nil];
+    
+    [notifyCenter addObserver : self
+                     selector : @selector(populateDataTypePopup)
+                         name : ORGroupObjectsAdded
+                       object : nil];
+    
+    [notifyCenter addObserver : self
+                     selector : @selector(populateDataTypePopup)
+                         name : ORGroupObjectsRemoved
+                       object : nil];
+    
+    [notifyCenter addObserver : self
+                     selector : @selector(l200FileNameChanged:)
+                         name : ORL200ModelL200FileNameChanged
+                       object : nil];
+
     [notifyCenter addObserver : self
                      selector : @selector(groupChanged:)
                          name : ORGroupObjectsAdded
@@ -193,7 +223,26 @@
                      selector : @selector(cc4ChanAdcClassNameChanged:)
                          name : ORSegmentGroupAdcClassNameChanged
                         object: [model segmentGroup:kL200CC4Type]];
-
+    [notifyCenter addObserver : self
+                     selector : @selector(adcSerialMapFileChanged:)
+                         name : ORSegmentGroupMapFileChanged
+                       object : self];
+    [notifyCenter addObserver : self
+                     selector : @selector(dataCycleChanged:)
+                         name : ORL200ModelDataCycleChanged
+                       object : nil];
+    [notifyCenter addObserver : self
+                     selector : @selector(dataPeriodChanged:)
+                         name : ORL200ModelDataPeriodChanged
+                       object : nil];
+    [notifyCenter addObserver : self
+                     selector : @selector(dataTypeChanged:)
+                         name : ORL200ModelDataTypeChanged
+                       object : nil];
+    [notifyCenter addObserver : self
+                     selector : @selector(customTypeChanged:)
+                         name : ORL200ModelCustomTypeChanged
+                       object : nil];
 }
 
 - (void) updateWindow
@@ -212,7 +261,72 @@
     [self auxChanMapFileChanged:nil];
     [self cc4ChanMapFileChanged:nil];
     [self cc4ChanAdcClassNameChanged:nil];
+    [self adcSerialMapFileChanged:nil];
+    [self dataCycleChanged:nil];
+    [self dataPeriodChanged:nil];
+    [self dataTypeChanged:nil];
+    [self customTypeChanged:nil];
+    [self l200FileNameChanged:nil];
 }
+
+- (void) populateDataTypePopup
+{
+    //called after document is loaded or configchanged
+    [dataTypePopup removeAllItems];
+    if(!rc){
+        rc = [[[(ORAppDelegate*)[NSApp delegate] document] findObjectWithFullID:@"ORRunModel,1"] retain];
+    }
+    NSArray* types = [rc runTypeNames];
+    int count = 0;
+    for(int i=0;i<32;i++){
+        NSString* anItem = [types objectAtIndex:i];
+        if(i<[types count] &&
+           i>=2            &&
+           [anItem length] <= 3 ){
+            [dataTypePopup addItemWithTitle:anItem];
+            [[dataTypePopup itemAtIndex:count] setTag:i];
+            count++;
+        }
+    }
+    //special case
+    [dataTypePopup addItemWithTitle:@"Custom"];
+    [[dataTypePopup itemAtIndex:count] setTag:32];
+    [self dataTypeChanged:nil];
+}
+
+- (void) l200FileNameChanged:(NSNotification*) aNote
+{
+    [l200FileNameField setStringValue:[model l200FileName]];
+}
+
+- (void) dataCycleChanged:(NSNotification*) aNote
+{
+    [dataCycleField setIntValue:[model dataCycle]];
+}
+
+- (void) dataPeriodChanged:(NSNotification*) aNote
+{
+    [dataPeriodField setIntValue:[model dataPeriod]];
+}
+
+- (void) dataTypeChanged:(NSNotification*) aNote
+{
+    [dataTypePopup selectItemWithTag:[model dataType]];
+    if([dataTypePopup selectedTag]==32){
+        [customTypeLabel setHidden:NO];
+        [customTypeField setHidden:NO];
+    }
+    else {
+        [customTypeLabel setHidden:YES];
+        [customTypeField setHidden:YES];
+    }
+}
+
+- (void) customTypeChanged:(NSNotification*) aNote
+{
+    [customTypeField setStringValue:[model customType]];
+}
+
 
 -(void) groupChanged:(NSNotification*)note
 {
@@ -330,6 +444,13 @@
     NSString* s = [[[model segmentGroup:kL200CC4Type] mapFile] stringByAbbreviatingWithTildeInPath];
     if(!s) s = @"--";
     [cc4ChanMapFileTextField setStringValue:s];
+}
+
+- (void) adcSerialMapFileChanged:(NSNotification*)note
+{
+    NSString* s = [[[model segmentGroup:kL200ADCType] mapFile] stringByAbbreviatingWithTildeInPath];
+    if(!s) s = @"--";
+    [adcSerialFileTextView setStringValue:s];
 }
 
 #pragma mark •••Actions
@@ -490,16 +611,67 @@
     [self autoscale:auxChanColorScale forSegmentGroup:kL200AuxType];
 }
 
+- (IBAction) saveADCSerialMapFileAction:(id)sender
+{
+    [self saveMapFile:kL200ADCType withDefaultPath:[self defaultADCSerialMapFilePath]];
+}
+
+- (IBAction) readADCSerialMapFileAction:(id)sender
+{
+    [self readMapFile:kL200ADCType intoTable:adcSerialTableView];
+}
+
+- (IBAction) dataCycleAction:(id)sender
+{
+    [model setDataCycle:[sender intValue]];
+}
+
+- (IBAction) dataPeriodAction:(id)sender
+{
+    [model setDataPeriod:[sender intValue]];
+}
+- (IBAction) bumpDataPeriod:(id)sender
+{
+    int aValue = [model dataPeriod];
+    if([sender intValue]==1)aValue++;
+    else aValue--;
+    [model setDataPeriod:aValue];
+}
+- (IBAction) bumpDataCycle:(id)sender
+{
+    int aValue = [model dataCycle];
+    if([sender intValue]==1)aValue++;
+    else aValue--;
+    [model setDataCycle:aValue];
+}
+
+- (void) controlTextDidChange: (NSNotification *)note {
+    NSTextField * field = [note object];
+    if(field==customTypeField){
+        [model setCustomType:[field stringValue]];
+    }
+}
+
+- (IBAction) customTypeAction:(id)sender
+{
+    [model setCustomType:[sender stringValue]];
+}
+
+- (IBAction) dataTypePopupAction:(id)sender
+{
+    [model setDataType:(int)[sender selectedTag]];
+}
 
 #pragma mark •••Interface Management
 
 - (int) segmentTypeFromTableView:(NSTableView*)view
 {
-    if(view == primaryTableView)      return kL200DetType;
-    else if(view == sipmTableView)    return kL200SiPMType;
-    else if(view == pmtTableView)     return kL200PMTType;
-    else if(view == auxChanTableView) return kL200AuxType;
-    else if(view == cc4TableView)     return kL200CC4Type;
+    if(view == primaryTableView)        return kL200DetType;
+    else if(view == sipmTableView)      return kL200SiPMType;
+    else if(view == pmtTableView)       return kL200PMTType;
+    else if(view == auxChanTableView)   return kL200AuxType;
+    else if(view == cc4TableView)       return kL200CC4Type;
+    else if(view == adcSerialTableView) return kL200ADCType;
     else return -1;
 }
 
@@ -516,9 +688,10 @@
 - (NSInteger) numberOfRowsInTableView:(NSTableView*)aTableView
 {
     int type = [self segmentTypeFromTableView:aTableView];
-    if(type >= 0 && type < kL200CC4Type)        return [[model segmentGroup:type] numSegments];
-    else if(type==kL200CC4Type)                 return kNumCC4Positions;
-    else if(aTableView == stringMapTableView)   return kL200MaxDetsPerString;
+    if(type >= 0 && type < kL200CC4Type) return [[model segmentGroup:type] numSegments];
+    else if(type == kL200CC4Type)        return kNumCC4Positions;
+    else if(type == kL200ADCType)        return [[model segmentGroup:type] numSegments];
+    else if(aTableView)                  return kL200MaxDetsPerString;
     else return 0;
 }
 
@@ -540,7 +713,6 @@
         }
         else return [[model segmentGroup:type] segment:(int)aRowIndex objectForKey:[aTableColumn identifier]];
     }
-    else if(aTableView == stringMapTableView) return nil;
     else return nil;
 }
 
@@ -556,6 +728,46 @@
         else {
             ORDetectorSegment* segment = [[model segmentGroup:type] segment:(int)aRowIndex];
             [segment setObject:anObject forKey:[aTableColumn identifier]];
+            // add the ADC daughter card serial numbers to the channel maps
+            if(type == kL200ADCType){
+                NSString* identifier = [aTableColumn identifier];
+                if([identifier isEqualTo:@"adc_serial_0"] || [identifier isEqualTo:@"adc_serial_1"]){
+                    NSString* serial = (NSString*) anObject;
+                    if(serial){
+                        if([serial length] > 0 && [serial rangeOfString:@"-"].location == NSNotFound){
+                            id crate = [self tableView:aTableView
+                             objectValueForTableColumn:[aTableView tableColumnWithIdentifier:@"daq_crate"]
+                                                   row:aRowIndex];
+                            id addr =  [self tableView:aTableView
+                             objectValueForTableColumn:[aTableView tableColumnWithIdentifier:@"daq_board_id"]
+                                                   row:aRowIndex];
+                            id slot  = [self tableView:aTableView
+                             objectValueForTableColumn:[aTableView tableColumnWithIdentifier:@"daq_board_slot"]
+                                                   row:aRowIndex];
+                            id ser0  = [self tableView:aTableView
+                             objectValueForTableColumn:[aTableView tableColumnWithIdentifier:@"adc_serial_0"]
+                                                   row:aRowIndex];
+                            id ser1 = [self tableView:aTableView
+                            objectValueForTableColumn:[aTableView tableColumnWithIdentifier:@"adc_serial_1"]
+                                                  row:aRowIndex];
+                            for(int itype=kL200DetType; itype<=kL200AuxType; itype++){
+                                int nchan = (itype == kL200PMTType) ? kFlashCamADCStdChannels/2 : kFlashCamADCChannels/2;
+                                for(int iseg=0; iseg<[[model segmentGroup:itype] numSegments]; iseg++){
+                                    ORDetectorSegment* segment = [[model segmentGroup:itype] segment:iseg];
+                                    if([[segment objectForKey:@"daq_crate"]        isEqualToString:crate] &&
+                                       [[segment objectForKey:@"daq_board_id"]     isEqualToString:addr]  &&
+                                       [[segment objectForKey:@"daq_board_slot"]   isEqualToString:slot]){
+                                        if([[segment objectForKey:@"daq_board_ch"] intValue]  < nchan)
+                                            [segment  setObject:ser0 forKey:@"adc_serial"];
+                                        else [segment setObject:ser1 forKey:@"adc_serial"];
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    
+                }
+            }
         }
         [[model segmentGroup:type] configurationChanged:nil];
     }

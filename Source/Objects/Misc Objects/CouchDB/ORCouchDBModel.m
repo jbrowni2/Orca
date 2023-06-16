@@ -229,9 +229,19 @@ static NSString* ORCouchDBModelInConnector 	= @"ORCouchDBModelInConnector";
 					   object : nil];
 
     [notifyCenter addObserver : self
+                     selector : @selector(addObjectValueRecord:)
+                         name : @"ORCouchDBBlockStatusLogRecord"
+                       object : nil];
+        
+    [notifyCenter addObserver : self
 					 selector : @selector(addObjectValueRecord:)
 						 name : @"ORCouchDBAddObjectRecord"
 					   object : nil];
+    
+    [notifyCenter addObserver : self
+                     selector : @selector(addObjectValueRecord:)
+                         name : @"ORGenericObjectDBRecord"
+                       object : nil];
 
     [notifyCenter addObserver : self
 					 selector : @selector(addAdcsToHistoryRecord:)
@@ -1492,7 +1502,7 @@ static NSString* ORCouchDBModelInConnector 	= @"ORCouchDBModelInConnector";
             NSTimeZone* gmt = [NSTimeZone timeZoneWithAbbreviation:@"GMT"];
             [dateFormatter setTimeZone:gmt];
             NSString *lastTimeStamp = [dateFormatter stringFromDate:[NSDate date]];
-
+            [dateFormatter release];
             [runInfo setObject:@"runinfo" forKey:@"_id"];
 			[runInfo setObject:@"runinfo" forKey:@"type"];
 			[runInfo setObject:experimentName forKey:@"experiment"];

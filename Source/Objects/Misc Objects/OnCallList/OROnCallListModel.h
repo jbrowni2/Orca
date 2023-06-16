@@ -16,14 +16,14 @@
 //express or implied, or assume any liability or responsibility 
 //for the use of this software.
 //-------------------------------------------------------------
-
 #define kPersonRole      @"kPersonRole"
 #define kPersonName      @"kPersonName"
 #define kPersonAddress   @"kPersonAddress"
 #define kPersonStatus    @"kPersonStatus"
+#define kPersonTimeZone  @"kPersonTimeZone"
 
 @class OROnCallPerson;
-
+@class ORInFluxDBModel;
 @interface OROnCallListModel : OrcaObject  {
     NSMutableArray* onCallList;
     NSString*       lastFile;
@@ -32,9 +32,11 @@
     BOOL            primaryNotified;
     BOOL            secondaryNotified;
     BOOL            tertiaryNotified;
+    BOOL            quaternaryNotified;
     NSDate*         timePrimaryNotified;
     NSDate*         timeSecondaryNotified;
     NSDate*         timeTertiaryNotified;
+    NSDate*         timeQuaternaryNotified;
     BOOL            slackEnabled;
     BOOL            rocketChatEnabled;
 }
@@ -46,6 +48,7 @@
 - (void) alarmAcknowledged: (NSNotification*)aNote;
 - (void) resetAll;
 - (void) postAGlobalNotification;
+- (void) loadBucket:(NSString*)aBucket inFluxDB:(ORInFluxDBModel*)influx;
 
 #pragma mark •••Accessors
 - (void) addPerson;
@@ -56,9 +59,10 @@
 - (void) personTakingNewRole:(id)aPerson;
 - (void) startContactProcess;
 - (uint32_t) onCallListCount;
-- (OROnCallPerson*) primaryPerson;
-- (OROnCallPerson*) secondaryPerson;
-- (OROnCallPerson*) tertiaryPerson;
+- (OROnCallPerson*) primaryPerson:(BOOL)check;
+- (OROnCallPerson*) secondaryPerson:(BOOL)check;
+- (OROnCallPerson*) tertiaryPerson:(BOOL)check;
+- (OROnCallPerson*) quaternaryPerson:(BOOL)check;
 - (BOOL) notificationScheduled;
 - (void) sendMessageToOnCallPerson;
 - (void) broadcastMessage:(NSString*)aMessage;
@@ -79,9 +83,11 @@
 @property   (retain) NSDate*         timePrimaryNotified;
 @property   (retain) NSDate*         timeSecondaryNotified;
 @property   (retain) NSDate*         timeTertiaryNotified;
+@property   (retain) NSDate*         timeQuaternaryNotified;
 @property   (assign) BOOL            primaryNotified;
 @property   (assign) BOOL            secondaryNotified;
 @property   (assign) BOOL            tertiaryNotified;
+@property   (assign) BOOL            quaternaryNotified;
 @property   (assign,nonatomic) BOOL  slackEnabled;
 @property   (assign,nonatomic) BOOL  rocketChatEnabled;
 @end
@@ -101,7 +107,7 @@ extern NSString* OROnCallListModelEdited;
     NSMutableDictionary* data;
 }
 + (id) onCallPerson;
-+ (id) onCallPerson:(NSString*)aName address:(NSString*)contactInfo role:(int)aRole;
++ (id) onCallPerson:(NSString*)aName address:(NSString*)contactInfo role:(int)aRole timeZone:(NSString*)timeZone;
 - (id)copyWithZone:(NSZone *)zone;
 - (void) setValue:(id)anObject forKey:(id)aKey;
 - (id)   valueForKey:(id)aKey;
@@ -111,6 +117,7 @@ extern NSString* OROnCallListModelEdited;
 - (BOOL) isPrimary;
 - (BOOL) isSecondary;
 - (BOOL) isTertiary;
+- (BOOL) isQuaternary;
 - (NSString*) name;
 - (NSString*) address;
 - (void)      setStatus:(NSString*)aString;
@@ -121,6 +128,9 @@ extern NSString* OROnCallListModelEdited;
 - (id)   initWithCoder:(NSCoder*)decoder;
 - (void) encodeWithCoder:(NSCoder*)encoder;
 - (void) mailSent:(NSString*)to;
+- (void) loadBucket:(NSString*)aBucket inFluxDB:(ORInFluxDBModel*)influx;
+- (BOOL) checkTimeZone:(BOOL)check;
+- (NSString*) timezone;
 
 @property   (retain) NSMutableDictionary* data;
 

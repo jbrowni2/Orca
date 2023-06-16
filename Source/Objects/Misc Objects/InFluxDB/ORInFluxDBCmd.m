@@ -63,13 +63,16 @@
 - (void) logResult:(id)result code:(int)aCode delegate:(ORInFluxDBModel*)delegate
 {
     if(aCode == 200){/*success*/}
-    else if(aCode==400)NSLog(@"Influx: Bad Request\n%@\n",result);
-    else if(aCode==401)NSLog(@"Influx: Unauthorized Access\n");
-    else if(aCode==413)NSLog(@"Influx: Request too large\n");
-    else if(aCode==422)NSLog(@"Influx: Request unprocessable\n");
-    else if(aCode==429)NSLog(@"Influx: Too many requests\n");
-    else if(aCode==500)NSLog(@"Influx: Service error\n");
-    else if(aCode==503)NSLog(@"Influx: Service unavailable\n");
+
+    else if(aCode==400){
+        [delegate setErrorString:[NSString stringWithFormat:@"Bad Request:%@",result]];
+    }
+    else if(aCode==401)[delegate setErrorString:@"Unauthorized Access"];
+    else if(aCode==413)[delegate setErrorString:@"Request too large"];
+    else if(aCode==422)[delegate setErrorString:@"Request unprocessable"];
+    else if(aCode==429)[delegate setErrorString:@"Too many requests"];
+    else if(aCode==500)[delegate setErrorString:@"Service error"];
+    else if(aCode==503)[delegate setErrorString:@"Service unavailable"];
 }
 
 @end
@@ -96,7 +99,7 @@
 }
 - (NSMutableURLRequest*) requestFrom:(ORInFluxDBModel*)delegate
 {
-    NSString* requestString = [NSString stringWithFormat:@"http://%@:%ld/api/v2/buckets/%@",[delegate hostName],[delegate portNumber],bucketId];
+    NSString* requestString = [NSString stringWithFormat:@"%@/api/v2/buckets/%@",[delegate hostName],bucketId];
     NSMutableURLRequest* request = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:requestString]];
     request.HTTPMethod = @"DELETE";
     [request setValue:[NSString stringWithFormat:@"Token %@",[delegate authToken]]                     forHTTPHeaderField:@"Authorization"];
@@ -108,9 +111,15 @@
 - (void) logResult:(id)result code:(int)aCode delegate:(ORInFluxDBModel*)delegate
 {
     if(aCode == 204)NSLog(@"Deleted Bucket (id:%@)\n",bucketId);
-    else if(aCode==400)NSLog(@"Influx: Delete Bucket: Bad Request\n%@\n",result);
-    else if(aCode==401)NSLog(@"Influx: Delete Bucket: Unauthorized access\n");
-    else if(aCode==404)NSLog(@"Influx: Delete Bucket: BucketID: %d not found\n",bucketId);
+    else if(aCode==400){
+        [delegate setErrorString:[NSString stringWithFormat:@"Delete Bucket: Bad Request: %@",result]];
+    }
+    else if(aCode==401){
+        [delegate setErrorString:@"Delete Bucket: Unauthorized access"];
+    }
+    else if(aCode==404){
+        [delegate setErrorString:[NSString stringWithFormat:@"Delete Bucket: BucketID: %@ not found\n",bucketId]];
+    }
     else [super logResult:result code:aCode delegate:delegate];
 
 }
@@ -127,7 +136,7 @@
 
 - (NSMutableURLRequest*) requestFrom:(ORInFluxDBModel*)delegate
 {
-    NSString* requestString = [NSString stringWithFormat:@"http://%@:%ld/api/v2/buckets?org=%@",[delegate hostName],[delegate portNumber],[delegate org]];
+    NSString* requestString = [NSString stringWithFormat:@"%@/api/v2/buckets?org=%@",[delegate hostName],[delegate org]];
     NSMutableURLRequest* request = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:requestString]];
     request.HTTPMethod = @"GET";
     [request setValue:[NSString stringWithFormat:@"Token %@",[delegate authToken]]                     forHTTPHeaderField:@"Authorization"];
@@ -164,9 +173,9 @@
 
 - (NSMutableURLRequest*) requestFrom:(ORInFluxDBModel*)delegate
 {
-    NSString* requestString = [NSString stringWithFormat:@"http://%@:%ld/api/v2/orgs",[delegate hostName],[delegate portNumber]];
+    NSString* requestString = [NSString stringWithFormat:@"%@/api/v2/orgs",[delegate hostName]];
     NSMutableURLRequest* request = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:requestString]];
-    
+
     request.HTTPMethod = @"GET";
     [request setValue:[NSString stringWithFormat:@"Token %@",[delegate authToken]] forHTTPHeaderField:@"Authorization"];
     requestSize = [requestString length];
@@ -190,9 +199,9 @@
 
 - (NSMutableURLRequest*) requestFrom:(ORInFluxDBModel*)delegate
 {
-    NSString* requestString = [NSString stringWithFormat:@"http://%@:%ld/api/v2/orgs",[delegate hostName],[delegate portNumber]];
+    NSString* requestString = [NSString stringWithFormat:@"%@/api/v2/orgs",[delegate hostName]];
     NSMutableURLRequest* request = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:requestString]];
-    
+
     request.HTTPMethod = @"GET";
     [request setValue:[NSString stringWithFormat:@"Token %@",[delegate authToken]] forHTTPHeaderField:@"Authorization"];
     requestSize = [requestString length];
@@ -203,7 +212,9 @@
 - (void) logResult:(id)result code:(int)aCode delegate:(ORInFluxDBModel*)delegate
 {
     if(aCode == 200)[delegate decodeOrgList:result];
-    else if(aCode==400)NSLog(@"Influx: List Orgs: Bad Request\n%@\n",result);
+    else if(aCode==400){
+        [delegate setErrorString:[NSString stringWithFormat:@"List Orgs: Bad Request: %@",result]];
+    }
     else [super logResult:result code:aCode delegate:delegate];
 }
 @end
@@ -236,7 +247,7 @@
 
 - (NSMutableURLRequest*) requestFrom:(ORInFluxDBModel*)delegate
 {
-    NSString* requestString = [NSString stringWithFormat:@"http://%@:%ld/api/v2/buckets",[delegate hostName],[delegate portNumber]];
+    NSString* requestString = [NSString stringWithFormat:@"%@/api/v2/buckets",[delegate hostName]];
     NSMutableURLRequest* request = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:requestString]];
     request.HTTPMethod = @"POST";
     [request setValue:[NSString stringWithFormat:@"Token %@",[delegate authToken]] forHTTPHeaderField:@"Authorization"];
@@ -266,10 +277,12 @@
 - (void) logResult:(id)result code:(int)aCode delegate:(ORInFluxDBModel*)delegate
 {
     if(aCode == 201)   NSLog(@"Influx: Created Bucket: %@\n",bucket);
-    else if(aCode==400)NSLog(@"Influx: Create Bucket: Bad Request\n%@\n",result);
-    else if(aCode==401)NSLog(@"Influx: Create Bucket: Unauthorized access\n");
-    else if(aCode==403)NSLog(@"Influx: Create Bucket: Quota exceeded\n");
-    else if(aCode==422){/*exists*/}
+    else if(aCode==400){
+        [delegate setErrorString:[NSString stringWithFormat:@"Create Bucket: Bad Request:%@",result]];
+    }
+    else if(aCode==401)[delegate setErrorString:@"Create Bucket: Unauthorized access"];
+    else if(aCode==403)[delegate setErrorString:@"Create Bucket: Quota exceeded"];
+    else if(aCode==422)[delegate setErrorString:[NSString stringWithFormat:@"Bucket: %@ already exists",bucket]];
     else [super logResult:result code:aCode delegate:delegate];
 }
 @end
@@ -285,86 +298,176 @@
 
 - (id) init:(int)aType bucket:(NSString*) aBucket  org:(NSString*)anOrg
 {
-    self   = [super init:aType];
-    bucket = [aBucket copy];
-    org    = [anOrg copy];
+    self         = [super init:aType];
+    bucket       = [aBucket copy];
+    org          = [anOrg copy];
+    tags         = [[NSMutableArray array] retain];
+    measurements = [[NSMutableArray array]retain];
+    return self;
+}
+
+- (void) dealloc
+{
+    [bucket       release];
+    [org          release];
+    [tags         release];
+    [measurement  release];
+    [measurements release];
+    [super dealloc];
+}
+- (void) setTimeStamp:(double)aTimeStamp
+{
+    timeStamp = aTimeStamp;
+}
+
+- (void) start:(NSString*)aMeasurement withTags:(NSString*)someTags
+{
+    measurement = [aMeasurement copy];
+    [tags addObject:someTags];
+}
+
+- (void) start:(NSString*)aMeasurement
+{
+    measurement = [aMeasurement copy];
+}
+
+- (NSString*) bucket
+{
+    return bucket;
+}
+
+- (NSString*) org
+{
+    return org;
+}
+
+- (void) addTag:(NSString*)aLabel withString:(NSString*)aValue
+{
+    [tags addObject:[NSString stringWithFormat:@"%@=%@",aLabel,aValue]];
+}
+
+- (void) addTag:(NSString*)aLabel withBoolean:(BOOL)aValue
+{
+    [tags addObject:[NSString stringWithFormat:@"%@=%@",aLabel,aValue?@"true":@"false"]];
+}
+
+- (void) addTag:(NSString*)aLabel withLong:(long)aValue
+{
+    [tags addObject:[NSString stringWithFormat:@"%@=%ld",aLabel,aValue]];
+}
+
+- (void) addTag:(NSString*)aLabel withDouble:(double)aValue
+{
+    [tags addObject:[NSString stringWithFormat:@"%@=%f",aLabel,aValue]];
+}
+
+- (void) addField:(NSString*)aValueName withBoolean:(BOOL)aValue
+{
+    [measurements addObject:[NSString stringWithFormat:@"%@=%@",aValueName,aValue?@"true":@"false"]];
+}
+
+- (void) addField:(NSString*)aValueName withLong:(long)aValue
+{
+    [measurements addObject:[NSString stringWithFormat:@"%@=%ldi",aValueName,aValue]];
+}
+
+- (void) addField:(NSString*)aValueName withDouble:(double)aValue
+{
+    [measurements addObject:[NSString stringWithFormat:@"%@=%f",aValueName,aValue]];
+}
+
+- (void) addField:(NSString*)aValueName withString:(NSString*)aValue
+{
+    [measurements addObject:[NSString stringWithFormat:@"%@=\"%@\"",aValueName,aValue]];
+}
+
+- (void) executeCmd:(ORInFluxDBModel*)aSender
+{
+    [aSender bufferMeasurement:self];
+}
+
+- (NSString*) cmdLine
+{
+    if([tags count]>0)return [NSString stringWithFormat:@"%@,%@ %@ %@",
+                              measurement,
+                              [tags componentsJoinedByString:@","],
+                              [measurements componentsJoinedByString:@","],
+                              timeStamp?[NSString stringWithFormat:@"%ld\n",(long)(timeStamp*1E9)]:@"\n"];
+    else return [NSString stringWithFormat:@"%@ %@ %@",
+                        measurement,
+                        [measurements componentsJoinedByString:@","],
+                        timeStamp?[NSString stringWithFormat:@"%ld\n",(long)(timeStamp*1E9)]:@"\n"];
+
+}
+
+- (NSMutableURLRequest*) requestFrom:(ORInFluxDBModel*)delegate
+{
+    NSString* cmdLine = [self cmdLine];
+            
+    NSString* requestString = [NSString stringWithFormat:@"%@/api/v2/write?org=%@&bucket=%@&precision=ns",[delegate hostName],org,bucket];
+    NSMutableURLRequest* request = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:requestString]];
+
+    request.HTTPMethod = @"POST";
+    [request setValue:@"text/plain; application/json" forHTTPHeaderField:@"Accept"];
+    [request setValue:[NSString stringWithFormat:@"Token %@",[delegate authToken]]                     forHTTPHeaderField:@"Authorization"];
+    
+    request.HTTPBody = [cmdLine dataUsingEncoding:NSASCIIStringEncoding];
+    requestSize = [cmdLine length];
+    
+    return request;
+}
+@end
+
+@implementation ORInFluxDBCmdLineMode
++ (ORInFluxDBCmdLineMode*)lineModeForBucket:(NSString*)aBucket org:(NSString*)anOrg
+{
+    return [[[self alloc] init:kFluxLineMode bucket:aBucket org:anOrg]autorelease];
+}
+
+- (id) init:(int)aType bucket:(NSString*) aBucket  org:(NSString*)anOrg
+{
+    self         = [super init:aType];
+    bucket       = [aBucket copy];
+    org          = [anOrg copy];
+    line         = [[NSMutableString stringWithCapacity:5000] retain];
     return self;
 }
 
 - (void) dealloc
 {
     [bucket release];
-    [org release];
-    [outputBuffer release];
+    [org    release];
+    [line   release];
     [super dealloc];
 }
 
-- (void) start:(NSString*)section withTags:(NSString*)someTags
+- (void) appendLine:(NSString*)aLine
 {
-    if(!outputBuffer) outputBuffer = [[NSMutableString alloc] init];
-    someTags = [someTags stringByReplacingOccurrencesOfString:@" " withString:@"_"];
-    [outputBuffer appendFormat:@"%@,%@ ",section,someTags];
+    [line appendString:aLine];
 }
 
-- (void) start:(NSString*)section
+- (NSString*) line
 {
-    //optional -- no tags
-    if(!outputBuffer) outputBuffer = [[NSMutableString alloc] init];
-    [outputBuffer appendFormat:@"%@ ",section];
-}
-
-- (void) removeEndingComma
-{
-    NSRange lastComma = [outputBuffer rangeOfString:@"," options:NSBackwardsSearch];
-
-    if(lastComma.location == [outputBuffer length]-1) {
-        [outputBuffer replaceCharactersInRange:lastComma
-                                           withString: @""];
-    }
-}
-
-- (void) addLong:(NSString*)aValueName withValue:(long)aValue
-{
-    [outputBuffer appendFormat:@"%@=%ld,",aValueName,aValue];
-}
-
-- (void) addDouble:(NSString*)aValueName withValue:(double)aValue
-{
-    [outputBuffer appendFormat:@"%@=%f,",aValueName,aValue];
-}
-
-- (void) addString:(NSString*)aValueName withValue:(NSString*)aValue
-{
-    [outputBuffer appendFormat:@"%@=\"%@\",",aValueName,aValue];
-}
-
-- (void) executeCmd:(ORInFluxDBModel*)aSender
-{
-    [self removeEndingComma];
-    [outputBuffer appendFormat:@"   \n"];
-    [aSender sendCmd:self];
-}
-
-- (NSString*) outputBuffer
-{
-    return outputBuffer;
+    return line;
 }
 
 - (NSMutableURLRequest*) requestFrom:(ORInFluxDBModel*)delegate
 {
-    NSString* requestString = [NSString stringWithFormat:@"http://%@:%ld/api/v2/write?org=%@&bucket=%@&precision=ns",[delegate hostName],[delegate portNumber],org,bucket];
+    NSString* cmdLine = [self line];
+    NSString* requestString = [NSString stringWithFormat:@"%@/api/v2/write?org=%@&bucket=%@&precision=ns",[delegate hostName],org,bucket];
     NSMutableURLRequest* request = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:requestString]];
     
     request.HTTPMethod = @"POST";
     [request setValue:@"text/plain; application/json" forHTTPHeaderField:@"Accept"];
     [request setValue:[NSString stringWithFormat:@"Token %@",[delegate authToken]]                     forHTTPHeaderField:@"Authorization"];
-    request.HTTPBody = [outputBuffer dataUsingEncoding:NSASCIIStringEncoding];
-    requestSize = [requestString length];
+    
+    request.HTTPBody = [cmdLine dataUsingEncoding:NSASCIIStringEncoding];
+    requestSize = [cmdLine length];
+    
     return request;
 }
+
 @end
-
-
 //----------------------------------------------------------------
 //  Delete Data
 //----------------------------------------------------------------
@@ -396,7 +499,7 @@
 
 - (NSMutableURLRequest*) requestFrom:(ORInFluxDBModel*)delegate
 {
-    NSString* requestString = [NSString stringWithFormat:@"http://%@:%ld/api/v2/delete?org=%@&bucket=%@",[delegate hostName],[delegate portNumber],org,bucket];
+    NSString* requestString = [NSString stringWithFormat:@"%@/api/v2/delete?org=%@&bucket=%@",[delegate hostName],org,bucket];
     NSMutableURLRequest* request = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:requestString]];
     request.HTTPMethod = @"POST";
     [request setValue:[NSString stringWithFormat:@"Token %@",[delegate authToken]] forHTTPHeaderField:@"Authorization"];
@@ -405,7 +508,7 @@
     NSMutableDictionary* dict = [NSMutableDictionary dictionary];
     [dict setObject:start forKey:@"start"];
     [dict setObject:stop forKey:@"stop"];
-    
+
     NSError* error;
     NSData*  jsonData = [NSJSONSerialization dataWithJSONObject:dict
                                                         options:0 //because don't care about readability
@@ -443,7 +546,7 @@
 
 - (NSMutableURLRequest*) requestFrom:(ORInFluxDBModel*)delegate
 {
-    NSString* requestString = [NSString stringWithFormat:@"http://%@:%ld/api/v2/delete?org=%@&bucket=%@",[delegate hostName],[delegate portNumber],org,bucket];
+    NSString* requestString = [NSString stringWithFormat:@"%@/api/v2/delete?org=%@&bucket=%@",[delegate hostName],org,bucket];
     NSMutableURLRequest* request = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:requestString]];
     request.HTTPMethod = @"POST";
     [request setValue:[NSString stringWithFormat:@"Token %@",[delegate authToken]] forHTTPHeaderField:@"Authorization"];
